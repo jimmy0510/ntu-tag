@@ -62,6 +62,11 @@
   .chip i { width:10px; height:10px; border-radius:50% }
   .chip small { color:var(--muted); font-size:12px }
   #map { flex:1 }
+  #areaBox { display:grid; gap:8px }
+  #areaMap { height:320px; border-radius:8px; border:1px solid var(--line) }
+  .areaTools { display:flex; gap:8px; align-items:center; font-size:14px; color:var(--muted) }
+  .areaTools span { flex:1 }
+  .areaTools button { padding:6px 10px; font-size:13px }
   .tag { font-weight:600 }
 </style>
 </head>
@@ -94,6 +99,16 @@
     <span>人看不看得到鬼的位置</span>
     <label><input type="radio" name="sg" id="sgNo" checked>看不到（鬼不用回報位置）</label>
     <label><input type="radio" name="sg" id="sgYes">看得到（鬼也要裝 App 回報位置）</label>
+  </div>
+  <div class="opt">
+    <span>活動範圍</span>
+    <label><input type="radio" name="ar" id="arNo" checked>不限</label>
+    <label><input type="radio" name="ar" id="arYes">限定範圍（在地圖上點出來，所有人都看得到）</label>
+    <div id="areaBox" hidden>
+      <p class="muted">依照順序在地圖上點出範圍的每個角，至少 3 點，系統會依序連成一個區域。</p>
+      <div id="areaMap"></div>
+      <div class="areaTools"><span id="areaCount">已點 0 點</span><button type="button" id="areaUndo">復原一點</button><button type="button" id="areaClear">全部清除</button></div>
+    </div>
   </div>
   <div class="opt">
     <span>時間（可以不填）</span>
@@ -174,7 +189,7 @@ function show(step) {
   for (const id of ['s1', 'sNew', 's2', 's3']) $(id).hidden = id !== step;
   $('mapView').hidden = step !== 'map';
   $('rNew').textContent = $('r2').textContent = $('r3').textContent = st.room || '';
-  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = '' }
+  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = ''; $('arNo').checked = true; areaPts = []; drawArea() }
   if (step === 's2') {
     $('name').value = st.name || '';
     $('pickRole').hidden = !!st.cfg?.auto_assign;
@@ -195,6 +210,7 @@ function rulesLines(c) {
     `身分：${c.auto_assign ? '系統隨機分配' : '每個人自己選'}`,
     `人被抓到後：${c.caught_to_ghost ? '變成鬼' : '出局'}`,
     `人${c.show_ghosts ? '看得到' : '看不到'}鬼的位置`,
+    c.area && `活動範圍：限定（地圖上的綠色框）`,
     c.ghost_start_at && `鬼開始抓人：${hm(c.ghost_start_at)}`,
     c.end_at && `遊戲結束：${hm(c.end_at)}`,
   ].filter(Boolean);
@@ -212,12 +228,37 @@ async function enterRoom(code) {
 }
 $('join').onclick = () => enterRoom($('joinCode').value);
 $('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
+// 活動範圍：房主依序點頂點，連成多邊形
+let areaMap, areaLayer, areaPts = [];
+const AREA_STYLE = { color: '#1f6b47', weight: 3, dashArray: '8 6', fillOpacity: .06 };
+function drawArea() {
+  $('areaBox').hidden = !$('arYes').checked;
+  $('areaCount').textContent = `已點 ${areaPts.length} 點` + (areaPts.length && areaPts.length < 3 ? '，還要再點' : '');
+  if ($('areaBox').hidden) return;
+  if (!areaMap) {
+    areaMap = L.map('areaMap').setView(NTU, 16);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(areaMap);
+    areaLayer = L.layerGroup().addTo(areaMap);
+    areaMap.on('click', e => { areaPts.push([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]); drawArea() });
+  }
+  areaMap.invalidateSize();
+  areaLayer.clearLayers();
+  if (areaPts.length >= 3) L.polygon(areaPts, AREA_STYLE).addTo(areaLayer);
+  else if (areaPts.length === 2) L.polyline(areaPts, AREA_STYLE).addTo(areaLayer);
+  areaPts.forEach((p, i) => L.circleMarker(p, { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6b47', fillOpacity: 1 })
+    .bindTooltip(String(i + 1), { permanent: true, direction: 'center', className: 'tag', opacity: .9 }).addTo(areaLayer));
+}
+$('arNo').onchange = $('arYes').onchange = drawArea;
+$('areaUndo').onclick = () => { areaPts.pop(); drawArea() };
+$('areaClear').onclick = () => { areaPts = []; drawArea() };
+
 $('createRoom').onclick = async () => {
   const t = id => $(id).value ? new Date($(id).value).toISOString() : null; // datetime-local 是手機當地時間
   const body = {
     room: st.room, auto_assign: $('aaYes').checked, caught_to_ghost: $('ctgYes').checked, show_ghosts: $('sgYes').checked,
-    ghost_start_at: t('ghostStart'), end_at: t('endAt'),
+    ghost_start_at: t('ghostStart'), end_at: t('endAt'), area: $('arYes').checked ? areaPts : null,
   };
+  if (body.area && body.area.length < 3) return alert('活動範圍至少要點 3 個點');
   if (body.end_at && Date.parse(body.end_at) <= Date.now()) return alert('遊戲結束時間要在現在之後');
   if (body.end_at && body.ghost_start_at && body.end_at <= body.ghost_start_at) return alert('遊戲結束時間要在鬼開始抓人之後');
   $('createRoom').disabled = true;
@@ -276,7 +317,7 @@ document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
 $('toMap').onclick = () => show('map');
 
 // 4. 地圖
-let map, markers = new Map(), meDot, timer, clockTimer, wake, players = [];
+let map, markers = new Map(), meDot, timer, clockTimer, wake, players = [], gameArea;
 async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
 function startMap() {
@@ -318,6 +359,8 @@ async function poll() {
     ]);
     if (!rr.ok || !pr.ok) throw new Error(rr.ok ? pr.status : rr.status);
     st.cfg = (await rr.json())[0] || st.cfg || { caught_to_ghost: true, show_ghosts: false };
+    // 活動範圍只畫一次（建立後不會變），第一次順便把地圖對準範圍
+    if (st.cfg.area && !gameArea) { gameArea = L.polygon(st.cfg.area, { ...AREA_STYLE, interactive: false }).addTo(map); map.fitBounds(gameArea.getBounds().pad(0.1)) }
     const rows = players = await pr.json(), seen = new Set(), list = [];
     const me = rows.find(p => p.name === st.name);
     if (me && me.role !== st.role) {
@@ -342,7 +385,7 @@ async function poll() {
       chip.querySelector('b').textContent = p.name + (mine ? '（你）' : '');
       chip.querySelector('small').textContent =
         !ghost && p.caught ? '人・出局' :
-        (ghost && p.caught ? '鬼（被抓）' : ROLE[p.role]) + (!visible ? '' : located ? '・' + agoText(s) : '・尚未回報');
+        (ghost && p.caught ? '鬼（被抓）' : ROLE[p.role]) + (!visible ? '' : located ? '・' + agoText(s) : ghost && !st.cfg.show_ghosts ? '' : '・尚未回報');
       chip.disabled = !located;
       if (located) chip.onclick = () => map.setView([p.lat, p.lng], 18);
       list.push(chip);
@@ -426,7 +469,7 @@ $('caught').onclick = async () => {
     : '你現在是鬼了。請把 Traccar 的追蹤關掉，省電也避免露出位置。');
 };
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
-$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); st = {}; store.set(st); show('s1') };
+$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); gameArea?.remove(); gameArea = null; st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
