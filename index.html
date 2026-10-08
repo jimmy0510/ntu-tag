@@ -14,64 +14,82 @@
   body { background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,"Noto Sans TC","PingFang TC",sans-serif }
   main { max-width:480px; margin:0 auto; padding:24px 16px; display:grid; gap:16px }
   h1 { margin:0; font-size:28px }
+  h2 { margin:0; font-size:22px }
   p { margin:0 }
   .muted { color:var(--muted); font-size:14px }
   label { display:grid; gap:4px; font-size:14px; color:var(--muted) }
   input { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
-  .roles { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+  #joinCode { text-transform:uppercase; letter-spacing:.2em; font-size:24px; text-align:center }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:8px }
   button { font:inherit; font-weight:600; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
   button.ghost { background:var(--ghost); border-color:var(--ghost); color:#fff }
+  button.link { background:none; border:0; padding:4px 0; color:var(--muted); font-weight:400; text-decoration:underline; justify-self:start }
   button:focus-visible, input:focus-visible { outline:3px solid var(--accent); outline-offset:2px }
-  .status { padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card); font-variant-numeric:tabular-nums }
+  .roomTag { font-size:14px; color:var(--muted) }
+  .roomTag b { color:var(--fg); letter-spacing:.15em }
+  .field { display:grid; gap:4px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
+  .field span { font-size:13px; color:var(--muted) }
+  .field div { display:flex; gap:8px; align-items:center }
+  .field code { flex:1; min-width:0; word-break:break-all; font-size:15px; user-select:all }
+  .field button { padding:6px 10px; font-size:13px }
+  ol { margin:0; padding-left:20px; display:grid; gap:8px }
+  a { color:var(--accent) }
   #mapView { position:fixed; inset:0; display:flex; flex-direction:column }
   #mapBar { display:flex; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
   #mapBar span { flex:1; min-width:0 }
   #mapBar button { padding:6px 10px }
   #map { flex:1 }
   .tag { font-weight:600 }
-  details ol { margin:8px 0 0; padding-left:20px; display:grid; gap:6px }
-  summary { cursor:pointer }
-  code { word-break:break-all }
-  details button { padding:2px 8px; font-size:13px }
-  a { color:var(--accent) }
-  .stale { opacity:.5 }
 </style>
 </head>
 <body>
 
-<main id="joinView">
+<!-- 1. 房間 -->
+<main id="s1">
   <h1>台大鬼抓人</h1>
-  <p class="muted">人：分享自己的位置。鬼：看地圖上所有人的位置。同一場遊戲請用同一個房間代碼。</p>
-  <label for="room">房間代碼<input id="room" maxlength="30" value="ntu"></label>
-  <label for="name">暱稱<input id="name" maxlength="20" placeholder="例如：小明"></label>
-  <div class="roles">
-    <button id="asHuman" class="primary">我是人（分享定位）</button>
-    <button id="asGhost" class="ghost">我是鬼（看地圖）</button>
+  <p class="muted">一場遊戲一個房間。由一個人建立房間，把房號告訴其他人，大家再加入同一個房間。</p>
+  <button id="create" class="primary">建立房間</button>
+  <label for="joinCode">或輸入房號加入<input id="joinCode" maxlength="8" autocomplete="off" placeholder="例如 K7QX"></label>
+  <button id="join">加入房間</button>
+</main>
+
+<!-- 2. 名字與身份 -->
+<main id="s2" hidden>
+  <p class="roomTag">房號 <b id="r2"></b>　請把房號告訴其他玩家</p>
+  <h2>你的名字</h2>
+  <label for="name">暱稱（地圖上會顯示這個名字，不要跟別人重複）<input id="name" maxlength="20" placeholder="例如：小明"></label>
+  <div class="row">
+    <button id="asHuman" class="primary">我是人</button>
+    <button id="asGhost" class="ghost">我是鬼</button>
   </div>
-  <p class="muted">分享期間會把你的 GPS 位置傳給同房間的鬼。按「停止分享」或關掉頁面後，位置會刪除或在 30 分鐘後不再顯示。</p>
-  <details class="status">
-    <summary><b>想鎖屏也繼續被追蹤？改用 App</b></summary>
-    <ol class="muted">
-      <li>安裝免費的 <b>Traccar Client</b>（<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a>）。</li>
-      <li>「伺服器網址」填：<br><code id="srv">https://ielczttxqhgmpefbolvb.supabase.co/functions/v1/traccar</code> <button id="copySrv" type="button">複製</button></li>
-      <li>「裝置識別碼」改成 <code>房間代碼-暱稱</code>，例如 <code id="devEx">ntu-小明</code>。</li>
-      <li>定位精確度選「高」，距離設 0，靜止時回報間隔設 60 秒。打開「進階設定」，把<b>靜止偵測關閉</b>、保持處理器喚醒打開。App 只在移動時回報，站著不動時位置不會更新，但最後的位置還是對的。</li>
-      <li>打開追蹤開關。定位權限選「永遠允許」（iOS）或「一律允許」（Android），並允許在背景執行、關閉省電限制。</li>
-      <li>遊戲結束記得把追蹤開關關掉。</li>
-    </ol>
-  </details>
+  <p class="muted">人要安裝 App 回報位置；鬼不用回報，直接看地圖。所有人都能在地圖上看到人的位置。</p>
+  <button class="link" data-back="s1">← 換房間</button>
 </main>
 
-<main id="humanView" hidden>
-  <h1>正在分享定位</h1>
-  <div class="status" id="hStatus">等待定位授權…</div>
-  <p class="muted">請保持這個頁面開著、螢幕亮著。手機鎖屏或切到別的 App 時，瀏覽器會停止回報位置。</p>
-  <button id="stop">停止分享並離開</button>
+<!-- 3. Traccar 設定教學 -->
+<main id="s3" hidden>
+  <p class="roomTag">房號 <b id="r3"></b></p>
+  <h2>設定定位 App</h2>
+  <p class="muted">用 Traccar Client 回報位置，手機鎖屏也會繼續追蹤。</p>
+  <ol>
+    <li>安裝免費的 <b>Traccar Client</b>：<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a></li>
+    <li>打開 App 的「設定」，把下面兩個值填進去：
+      <div class="field"><span>裝置識別碼</span><div><code id="devId"></code><button data-copy="devId">複製</button></div></div>
+      <div class="field"><span>伺服器網址</span><div><code id="srv">https://ielczttxqhgmpefbolvb.supabase.co/functions/v1/traccar</code><button data-copy="srv">複製</button></div></div>
+    </li>
+    <li>定位精確度選「高」，距離設 <b>0</b>，靜止時回報間隔設 60 秒。</li>
+    <li>打開「進階設定」：<b>靜止偵測關閉</b>，保持處理器喚醒打開。</li>
+    <li>回到主畫面打開追蹤開關。定位權限選「永遠允許」（iOS）或「一律允許」（Android），Android 再把這個 App 的電池設成「不限制」。</li>
+    <li>遊戲中不要在多工畫面把 App 滑掉，鎖屏沒關係。遊戲結束記得關掉追蹤。</li>
+  </ol>
+  <button id="toMap" class="primary">設定好了，進入地圖</button>
+  <button class="link" data-back="s2">← 改名字</button>
 </main>
 
+<!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button id="leave">離開</button></div>
   <div id="map"></div>
 </div>
 
@@ -79,103 +97,104 @@
 <script>
 const API = 'https://ielczttxqhgmpefbolvb.supabase.co/rest/v1/tag_players';
 const KEY = 'sb_publishable_7N33sjVdcGN_qMyLYcnZOQ_Em74n49h';
-const H = { apikey: KEY, 'Content-Type': 'application/json' };
 const NTU = [25.0174, 121.5397];
 // App 靜止時不回報（Android 會把心跳拖到數分鐘），所以 10 分鐘沒更新才變灰；標籤的「幾分前」才是準的
-const STALE_S = 600, HIDE_S = 30 * 60, PUSH_MS = 5000, POLL_MS = 5000;
+const STALE_S = 600, HIDE_S = 30 * 60, POLL_MS = 5000;
 const $ = id => document.getElementById(id);
-const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } };
+const store = { get(k) { try { return JSON.parse(localStorage.getItem('tag')) || {} } catch { return {} } }, set(v) { try { localStorage.setItem('tag', JSON.stringify(v)) } catch {} } };
+let st = store.get(); // { room, name, role, step }
 
-let myId = store.get('tagId') || (crypto.randomUUID?.() ?? '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
-store.set('tagId', myId);
-$('name').value = store.get('tagName') || '';
-$('room').value = store.get('tagRoom') || 'ntu';
-
-function form() {
-  const room = $('room').value.trim(), name = $('name').value.trim();
-  store.set('tagRoom', room); store.set('tagName', name);
-  return { room, name };
+function show(step) {
+  st.step = step; store.set(st);
+  for (const id of ['s1', 's2', 's3']) $(id).hidden = id !== step;
+  $('mapView').hidden = step !== 'map';
+  $('r2').textContent = $('r3').textContent = st.room || '';
+  if (step === 's2') $('name').value = st.name || '';
+  if (step === 's3') $('devId').textContent = `${st.room}-${st.name}`;
+  if (step === 'map') startMap();
 }
-function ago(iso) { return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)) }
-let wake;
+
+// 1. 房間
+$('create').onclick = () => {
+  const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  st.room = [...crypto.getRandomValues(new Uint8Array(4))].map(b => A[b % A.length]).join('');
+  show('s2');
+};
+$('join').onclick = () => {
+  const code = $('joinCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) return $('joinCode').focus();
+  st.room = code; show('s2');
+};
+$('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
+
+// 2. 名字與身份
+function pick(role) {
+  const name = $('name').value.trim();
+  if (!name) return $('name').focus();
+  st.name = name; st.role = role;
+  show(role === 'human' ? 's3' : 'map');
+}
+$('asHuman').onclick = () => pick('human');
+$('asGhost').onclick = () => pick('ghost');
+document.querySelectorAll('[data-back]').forEach(b => b.onclick = () => show(b.dataset.back));
+
+// 3. 教學
+document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
+  const el = $(b.dataset.copy);
+  navigator.clipboard.writeText(el.textContent).then(() => { b.textContent = '已複製'; setTimeout(() => b.textContent = '複製', 1500) }, () => getSelection().selectAllChildren(el));
+});
+$('toMap').onclick = () => show('map');
+
+// 4. 地圖
+let map, markers = new Map(), meDot, timer, wake;
 async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
-
-// ---------- 人 ----------
-let watchId, lastPush = 0, pending;
-$('asHuman').onclick = () => {
-  const { room, name } = form();
-  if (!room || !name) return alert('請填房間代碼和暱稱');
-  if (!navigator.geolocation) return alert('這個瀏覽器不支援定位');
-  $('joinView').hidden = true; $('humanView').hidden = false;
+function startMap() {
+  $('help').hidden = st.role !== 'human';
   keepAwake();
-  watchId = navigator.geolocation.watchPosition(p => {
-    pending = { id: myId, room, name, lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, updated_at: new Date().toISOString() };
-    if (Date.now() - lastPush >= PUSH_MS) push();
-  }, e => {
-    $('hStatus').textContent = e.code === 1 ? '你拒絕了定位權限。請到瀏覽器設定允許這個網站使用位置，再重新整理。' : '定位失敗：' + e.message;
-  }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 });
-  // ponytail: 靜止不動時 watchPosition 可能不觸發，定時重送最後位置讓鬼知道你還在線
-  setInterval(() => { if (pending) { pending.updated_at = new Date().toISOString(); push() } }, 20000);
-};
-async function push() {
-  lastPush = Date.now();
-  const body = pending;
-  try {
-    const r = await fetch(API + '?on_conflict=id', { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
-    $('hStatus').textContent = `已回報 ${new Date().toLocaleTimeString()}｜精度約 ${Math.round(body.acc)} 公尺`;
-  } catch (e) { $('hStatus').textContent = '上傳失敗，會自動重試：' + e.message }
+  if (!map) {
+    map = L.map('map').setView(NTU, 16);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    // 自己目前的位置（只顯示在自己的地圖上，不上傳）
+    navigator.geolocation?.watchPosition(p => {
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if (!meDot) meDot = L.circleMarker(ll, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(map).bindTooltip('你的手機');
+      else meDot.setLatLng(ll);
+    }, () => {}, { enableHighAccuracy: true });
+  }
+  setTimeout(() => map.invalidateSize(), 0);
+  clearInterval(timer); poll(); timer = setInterval(poll, POLL_MS);
 }
-$('stop').onclick = async () => {
-  navigator.geolocation.clearWatch(watchId);
-  try { await fetch(API + '?id=eq.' + myId, { method: 'DELETE', headers: H }) } catch {}
-  location.reload();
-};
-
-// ---------- 鬼 ----------
-let map, markers = new Map(), meDot, room;
-$('asGhost').onclick = () => {
-  room = form().room;
-  if (!room) return alert('請填房間代碼');
-  $('joinView').hidden = true; $('mapView').hidden = false;
-  keepAwake();
-  map = L.map('map').setView(NTU, 16);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
-  // 鬼自己的位置只顯示在自己的地圖上，不上傳
-  navigator.geolocation?.watchPosition(p => {
-    const ll = [p.coords.latitude, p.coords.longitude];
-    if (!meDot) meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(map).bindTooltip('你');
-    else meDot.setLatLng(ll);
-  }, () => {}, { enableHighAccuracy: true });
-  poll(); setInterval(poll, POLL_MS);
-};
+function ago(iso) { return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)) }
 async function poll() {
   try {
     const since = new Date(Date.now() - HIDE_S * 1000).toISOString();
-    const r = await fetch(`${API}?room=eq.${encodeURIComponent(room)}&updated_at=gte.${since}&select=id,name,lat,lng,acc,updated_at`, { headers: H });
+    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&updated_at=gte.${since}&select=id,name,lat,lng,acc,updated_at`, { headers: { apikey: KEY } });
     if (!r.ok) throw new Error(r.status);
     const rows = await r.json(), seen = new Set();
     let live = 0;
     for (const p of rows) {
       seen.add(p.id);
-      const s = ago(p.updated_at), stale = s > STALE_S;
+      const s = ago(p.updated_at), stale = s > STALE_S, mine = p.name === st.name;
       if (!stale) live++;
       const label = document.createElement('span');
-      label.className = 'tag'; label.textContent = `${p.name}・${s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分前'}`;
-      const style = { radius: 9, color: '#fff', weight: 2, fillColor: stale ? '#888' : '#b3261e', fillOpacity: 1 };
+      label.className = 'tag';
+      label.textContent = `${mine ? '你' : p.name}・${s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分前'}`;
+      const color = stale ? '#888' : mine ? '#1f6b47' : '#b3261e';
+      const style = { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 };
       let m = markers.get(p.id);
       if (!m) {
-        m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color: '#b3261e', fillOpacity: .08 }).addTo(map) };
+        m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color, fillOpacity: .08 }).addTo(map) };
         m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -8] });
         markers.set(p.id, m);
       } else {
         m.dot.setLatLng([p.lat, p.lng]).setStyle(style).setTooltipContent(label);
-        m.ring.setLatLng([p.lat, p.lng]).setRadius(p.acc || 0);
+        m.ring.setLatLng([p.lat, p.lng]).setRadius(p.acc || 0).setStyle({ color });
       }
     }
     for (const [id, m] of markers) if (!seen.has(id)) { m.dot.remove(); m.ring.remove(); markers.delete(id) }
-    $('gStatus').textContent = `房間「${room}」｜在線 ${live} 人，共 ${rows.length} 人｜${new Date().toLocaleTimeString()}`;
+    const meIn = rows.some(p => p.name === st.name);
+    $('gStatus').textContent = `房號 ${st.room}｜${st.role === 'ghost' ? '鬼' : '人'}｜在線 ${live}／${rows.length} 人` + (st.role === 'human' && !meIn ? '｜還沒收到你的位置，請檢查 App' : '');
   } catch (e) { $('gStatus').textContent = '讀取失敗，會自動重試：' + e.message }
 }
 $('fit').onclick = () => {
@@ -183,10 +202,10 @@ $('fit').onclick = () => {
   if (meDot) pts.push(meDot.getLatLng());
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
 };
-$('leave').onclick = () => location.reload();
-const devEx = () => { $('devEx').textContent = `${$('room').value.trim() || 'ntu'}-${$('name').value.trim() || '小明'}` };
-$('room').oninput = $('name').oninput = devEx; devEx();
-$('copySrv').onclick = () => navigator.clipboard.writeText($('srv').textContent).then(() => $('copySrv').textContent = '已複製', () => getSelection().selectAllChildren($('srv')));
+$('help').onclick = () => { clearInterval(timer); show('s3') };
+$('leave').onclick = () => { clearInterval(timer); st = {}; store.set(st); show('s1') };
+
+show(['s2', 's3', 'map'].includes(st.step) && st.room ? st.step : 's1');
 </script>
 </body>
 </html>
