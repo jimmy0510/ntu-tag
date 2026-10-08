@@ -30,6 +30,11 @@
   #mapBar button { padding:6px 10px }
   #map { flex:1 }
   .tag { font-weight:600 }
+  details ol { margin:8px 0 0; padding-left:20px; display:grid; gap:6px }
+  summary { cursor:pointer }
+  code { word-break:break-all }
+  details button { padding:2px 8px; font-size:13px }
+  a { color:var(--accent) }
   .stale { opacity:.5 }
 </style>
 </head>
@@ -45,6 +50,17 @@
     <button id="asGhost" class="ghost">我是鬼（看地圖）</button>
   </div>
   <p class="muted">分享期間會把你的 GPS 位置傳給同房間的鬼。按「停止分享」或關掉頁面後，位置會刪除或在 30 分鐘後不再顯示。</p>
+  <details class="status">
+    <summary><b>想鎖屏也繼續被追蹤？改用 App</b></summary>
+    <ol class="muted">
+      <li>安裝免費的 <b>Traccar Client</b>（<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a>）。</li>
+      <li>「伺服器網址」填：<br><code id="srv">https://ielczttxqhgmpefbolvb.supabase.co/functions/v1/traccar</code> <button id="copySrv" type="button">複製</button></li>
+      <li>「裝置識別碼」改成 <code>房間代碼-暱稱</code>，例如 <code id="devEx">ntu-小明</code>。</li>
+      <li>定位精確度選「高」，回報間隔設 10 秒。</li>
+      <li>打開追蹤開關。定位權限選「永遠允許」（iOS）或「一律允許」（Android），並允許在背景執行、關閉省電限制。</li>
+      <li>遊戲結束記得把追蹤開關關掉。</li>
+    </ol>
+  </details>
 </main>
 
 <main id="humanView" hidden>
@@ -167,6 +183,9 @@ $('fit').onclick = () => {
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
 };
 $('leave').onclick = () => location.reload();
+const devEx = () => { $('devEx').textContent = `${$('room').value.trim() || 'ntu'}-${$('name').value.trim() || '小明'}` };
+$('room').oninput = $('name').oninput = devEx; devEx();
+$('copySrv').onclick = () => navigator.clipboard.writeText($('srv').textContent).then(() => $('copySrv').textContent = '已複製', () => getSelection().selectAllChildren($('srv')));
 </script>
 </body>
 </html>
