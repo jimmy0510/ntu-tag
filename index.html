@@ -585,6 +585,18 @@ async function missionPoll(rows, me) {
     }
     st.lastMission = Math.max(mc.slot, -1);
   }
+  // 新合照：通知監控室和鬼；第一次打開只記下，畫廊開著就順便更新
+  if (canViewPhotos()) {
+    const shots = await (await fetch(`${JOINS}?room=eq.${q(st.room)}&photo=not.is.null&select=slot,name,partner,photo&order=created_at`, { headers: H })).json();
+    const fresh = st.seenPhotos ? shots.filter(s => !st.seenPhotos.includes(s.photo)) : [];
+    st.seenPhotos = shots.map(s => s.photo);
+    if (fresh.length) {
+      navigator.vibrate?.([150, 80, 150]);
+      if (!$('gallery').hidden) loadGallery();
+      alert('新合照！\n' + fresh.map(s => `${s.name}${s.partner ? `（和 ${s.partner}）` : ''}上傳了第 ${s.slot + 1} 輪的合照`).join('\n') +
+        ($('gallery').hidden ? '\n\n按地圖上方的「合照」查看。' : ''));
+    }
+  }
   store.set(st);
   if (!mc) { $('missionPanel').hidden = true; return }
 
