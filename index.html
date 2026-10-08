@@ -49,11 +49,13 @@
   #clock { font-weight:700; font-variant-numeric:tabular-nums }
   #mapBar button { padding:6px 10px }
   #mapBar #caught { margin-left:auto }
-  #hostPanel { display:flex; flex-wrap:wrap; gap:8px; align-items:end; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
-  #hostPanel label { width:72px }
-  #hostPanel input { padding:6px 8px }
-  #hostPanel button { padding:7px 12px }
-  #hostPanel p { flex:1 1 100%; font-size:13px; color:var(--muted) }
+  .panel { display:flex; flex-wrap:wrap; gap:8px; align-items:end; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
+  .panel label { width:72px }
+  .panel input { padding:6px 8px }
+  .panel button { padding:7px 12px }
+  .panel p { flex:1 1 100%; font-size:13px; color:var(--muted) }
+  #editPanel { align-items:center }
+  #editCount { flex:1 1 100%; font-size:14px; font-weight:600 }
   #players { display:flex; gap:6px; overflow-x:auto; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
   #players:empty { display:none }
   .chip { display:flex; align-items:center; gap:6px; flex:none; padding:4px 10px; border-radius:999px; font-weight:400; font-size:13px; white-space:nowrap }
@@ -162,8 +164,14 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="leave">離開</button></div>
-  <div id="hostPanel" hidden>
+  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="leave">離開</button></div>
+  <div id="editPanel" class="panel" hidden>
+    <p>在地圖上依序點出新範圍的每個角（至少 3 點）。灰色點線是目前的範圍。</p>
+    <span id="editCount">已點 0 點</span>
+    <button id="editUndo">復原一點</button><button id="editClear">全部清除</button><button id="editCancel">取消</button>
+    <button id="editSave" class="primary">儲存並通知縮圈</button>
+  </div>
+  <div id="hostPanel" class="panel" hidden>
     <p>你是房主。等大家都加入後，輸入人數和鬼數，按「遊戲開始」由系統隨機分配身分。</p>
     <label for="nHuman">人數<input type="number" id="nHuman" min="0" inputmode="numeric"></label>
     <label for="nGhost">鬼數<input type="number" id="nGhost" min="1" inputmode="numeric"></label>
@@ -246,15 +254,20 @@ function drawArea() {
     areaMap = L.map('areaMap').setView(NTU, 16);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(areaMap);
     areaLayer = L.layerGroup().addTo(areaMap);
-    areaMap.on('click', e => { areaPts.push([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]); drawArea() });
+    areaMap.on('click', e => { areaPts.push(ptOf(e)); drawArea() });
   }
   areaMap.invalidateSize();
-  areaLayer.clearLayers();
-  if (areaPts.length >= 3) L.polygon(areaPts, AREA_STYLE).addTo(areaLayer);
-  else if (areaPts.length === 2) L.polyline(areaPts, AREA_STYLE).addTo(areaLayer);
-  areaPts.forEach((p, i) => L.circleMarker(p, { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6b47', fillOpacity: 1 })
-    .bindTooltip(String(i + 1), { permanent: true, direction: 'center', className: 'tag', opacity: .9 }).addTo(areaLayer));
+  renderPts(areaLayer, areaPts);
 }
+// 建立房間和監控室縮圈共用：畫出編號頂點，3 點以上連成區域
+function renderPts(layer, pts) {
+  layer.clearLayers();
+  if (pts.length >= 3) L.polygon(pts, AREA_STYLE).addTo(layer);
+  else if (pts.length === 2) L.polyline(pts, AREA_STYLE).addTo(layer);
+  pts.forEach((p, i) => L.circleMarker(p, { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6b47', fillOpacity: 1 })
+    .bindTooltip(String(i + 1), { permanent: true, direction: 'center', className: 'tag', opacity: .9 }).addTo(layer));
+}
+const ptOf = e => [+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)];
 $('arNo').onchange = $('arYes').onchange = drawArea;
 $('areaUndo').onclick = () => { areaPts.pop(); drawArea() };
 $('areaClear').onclick = () => { areaPts = []; drawArea() };
@@ -325,7 +338,8 @@ document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
 $('toMap').onclick = () => show('map');
 
 // 4. 地圖
-let map, markers = new Map(), meDot, timer, clockTimer, wake, players = [], gameArea;
+let map, markers = new Map(), meDot, timer, clockTimer, wake, players = [], gameArea, drawnKey, editPts = null, editLayer;
+const DIM_STYLE = { ...AREA_STYLE, color: '#666', weight: 3, dashArray: '3 6', opacity: .9, fillOpacity: 0 };
 async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
 function startMap() {
@@ -333,6 +347,8 @@ function startMap() {
   if (!map) {
     map = L.map('map').setView(NTU, 16);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    editLayer = L.layerGroup().addTo(map);
+    map.on('click', e => { if (editPts) { editPts.push(ptOf(e)); renderEdit() } });
     // 自己目前的位置（只顯示在自己的地圖上，不上傳）
     navigator.geolocation?.watchPosition(p => {
       const ll = [p.coords.latitude, p.coords.longitude];
@@ -367,8 +383,17 @@ async function poll() {
     ]);
     if (!rr.ok || !pr.ok) throw new Error(rr.ok ? pr.status : rr.status);
     st.cfg = (await rr.json())[0] || st.cfg || { caught_to_ghost: true, show_ghosts: false };
-    // 活動範圍只畫一次（建立後不會變），第一次順便把地圖對準範圍
-    if (st.cfg.area && !gameArea) { gameArea = L.polygon(st.cfg.area, { ...AREA_STYLE, interactive: false }).addTo(map); map.fitBounds(gameArea.getBounds().pad(0.1)) }
+    // 活動範圍：有變就重畫；跟上次看到的不同就是監控室縮圈了（離線時改的，下次打開也會通知）
+    const key = JSON.stringify(st.cfg.area || null);
+    if (key !== drawnKey) {
+      const firstDraw = drawnKey === undefined; drawnKey = key;
+      gameArea?.remove();
+      gameArea = st.cfg.area ? L.polygon(st.cfg.area, { ...(editPts ? DIM_STYLE : AREA_STYLE), interactive: false }).addTo(map) : null;
+      const changed = st.areaKey !== undefined && st.areaKey !== key;
+      if (gameArea && (firstDraw || changed)) map.fitBounds(gameArea.getBounds().pad(0.1));
+      st.areaKey = key; store.set(st);
+      if (changed) { navigator.vibrate?.([300, 100, 300]); alert('縮圈！活動範圍已經更新，請看地圖上的綠色框。') }
+    }
     const rows = await pr.json(), seen = new Set(), list = [];
     players = rows.filter(p => p.role !== 'monitor'); // 監控室不參與分配
     const me = rows.find(p => p.name === st.name);
@@ -427,6 +452,7 @@ async function poll() {
       $('nGhost').value = g; $('nHuman').value = Math.max(n - g, 0);
     }
     $('caught').hidden = st.role !== 'human' || out || ended();
+    $('editArea').hidden = st.role !== 'monitor' || !!editPts;
     $('help').hidden = out || !needsApp();
     const h = rows.filter(p => p.role === 'human' && !p.caught).length, g = rows.filter(p => p.role === 'ghost').length;
     $('gStatus').textContent = `房號 ${st.room}｜你的身分：${out ? '出局' : ROLE[st.role] || '人'}｜` +
@@ -459,6 +485,33 @@ $('startGame').onclick = async () => {
   } catch (e) { alert('開始失敗，請再按一次：' + e.message) }
   $('startGame').disabled = false;
 };
+// 監控室縮圈：在主地圖上重新點範圍
+function renderEdit() {
+  $('editPanel').hidden = !editPts;
+  $('editArea').hidden = st.role !== 'monitor' || !!editPts;
+  gameArea?.setStyle(editPts ? DIM_STYLE : AREA_STYLE);
+  if (editPts) {
+    renderPts(editLayer, editPts);
+    $('editCount').textContent = `已點 ${editPts.length} 點` + (editPts.length < 3 ? '，至少要 3 點' : '');
+  } else editLayer.clearLayers();
+  map.invalidateSize();
+}
+$('editArea').onclick = () => { editPts = []; renderEdit() };
+$('editUndo').onclick = () => { editPts.pop(); renderEdit() };
+$('editClear').onclick = () => { editPts = []; renderEdit() };
+$('editCancel').onclick = () => { editPts = null; renderEdit() };
+$('editSave').onclick = async () => {
+  if (editPts.length < 3) return alert('新範圍至少要點 3 個點');
+  if (!confirm('儲存新範圍？所有人都會收到「縮圈」通知。')) return;
+  $('editSave').disabled = true;
+  try {
+    const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ area: editPts }) });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    st.areaKey = JSON.stringify(editPts); // 自己改的不用通知自己
+    editPts = null; renderEdit(); await poll();
+  } catch (e) { alert('儲存失敗，請再按一次：' + e.message) }
+  $('editSave').disabled = false;
+};
 $('fit').onclick = () => {
   const pts = [...markers.values()].map(m => m.dot.getLatLng());
   if (meDot) pts.push(meDot.getLatLng());
@@ -480,7 +533,7 @@ $('caught').onclick = async () => {
     : '你現在是鬼了。請把 Traccar 的追蹤關掉，省電也避免露出位置。');
 };
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
-$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); gameArea?.remove(); gameArea = null; st = {}; store.set(st); show('s1') };
+$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
