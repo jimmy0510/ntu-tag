@@ -45,6 +45,19 @@
   #missionPanel input[type=text] { width:6em; letter-spacing:.15em; text-align:center }
   #missionPanel input[type=file] { flex:1 1 12em; min-width:0; font-size:13px }
   .mcd { font-variant-numeric:tabular-nums }
+  #gallery { position:absolute; inset:0; z-index:2000; overflow-y:auto; background:var(--bg); padding:0 16px calc(16px + env(safe-area-inset-bottom,0px)) }
+  .gHead { position:sticky; top:0; display:flex; gap:8px; align-items:center; padding:12px 0; padding-top:calc(12px + env(safe-area-inset-top,0px)); background:var(--bg); border-bottom:1px solid var(--line) }
+  .gHead b { flex:1; font-size:18px }
+  .gHead button { padding:6px 12px }
+  #gList { display:grid; gap:20px; padding-top:16px; max-width:720px; margin:0 auto }
+  .gRound { display:grid; gap:8px }
+  .gRound h3 { margin:0; font-size:16px }
+  .gRound h3 small { font-weight:400; color:var(--muted); margin-left:8px }
+  .gPhotos { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px }
+  .gPhotos figure { margin:0; display:grid; gap:4px }
+  .gPhotos a { display:block; aspect-ratio:3/4; border-radius:8px; overflow:hidden; background:var(--card); border:1px solid var(--line) }
+  .gPhotos img { width:100%; height:100%; object-fit:cover; display:block }
+  .gPhotos figcaption { font-size:13px; color:var(--muted) }
   .opt input[type=radio] { width:18px; height:18px; margin:0 }
   .field { display:grid; gap:4px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
   .field span { font-size:13px; color:var(--muted) }
@@ -184,7 +197,7 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="photosBtn" hidden>合照</button><button id="leave">離開</button></div>
   <div id="editPanel" class="panel" hidden>
     <p>在地圖上依序點出新範圍的每個角（至少 3 點）。灰色點線是目前的範圍。</p>
     <span id="editCount">已點 0 點</span>
@@ -200,6 +213,10 @@
   <div id="missionPanel" class="panel" hidden></div>
   <div id="players"></div>
   <div id="map"></div>
+  <div id="gallery" hidden>
+    <div class="gHead"><b>任務合照</b><button id="gRefresh">重新整理</button><button id="gClose" class="primary">回到地圖</button></div>
+    <div id="gList"></div>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -494,6 +511,7 @@ async function poll() {
     }
     $('caught').hidden = st.role !== 'human' || out || ended();
     $('editArea').hidden = st.role !== 'monitor' || !!editPts;
+    $('photosBtn').hidden = !canViewPhotos();
     $('help').hidden = out || !needsApp();
     const h = rows.filter(p => p.role === 'human' && !p.caught).length, g = rows.filter(p => p.role === 'ghost').length;
     $('gStatus').textContent = `房號 ${st.room}｜你的身分：${out ? '出局' : ROLE[st.role] || '人'}｜` +
@@ -649,6 +667,49 @@ async function shrink(file) {
   } catch { return file }
 }
 
+// 任務合照：監控室和鬼可以看
+const canViewPhotos = () => !!st.cfg?.rules?.revive && (st.role === 'monitor' || st.role === 'ghost');
+const photoUrls = new Map(); // 照片要帶金鑰才能讀，抓成 blob 網址後快取
+async function photoUrl(path) {
+  if (!photoUrls.has(path)) {
+    const r = await fetch(STORAGE + path, { headers: { apikey: KEY } });
+    if (!r.ok) throw new Error(r.status);
+    photoUrls.set(path, URL.createObjectURL(await r.blob()));
+  }
+  return photoUrls.get(path);
+}
+async function loadGallery() {
+  const list = $('gList');
+  list.textContent = '載入中…';
+  try {
+    const [joins, results] = await Promise.all([
+      fetch(`${JOINS}?room=eq.${q(st.room)}&photo=not.is.null&order=slot.desc,created_at`, { headers: H }).then(r => r.json()),
+      fetch(`${RESULTS}?room=eq.${q(st.room)}`, { headers: H }).then(r => r.json()),
+    ]);
+    if (!joins.length) { list.textContent = '還沒有人上傳合照。'; return }
+    const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e };
+    const rounds = [];
+    for (const slot of [...new Set(joins.map(j => j.slot))]) {
+      const res = results.find(r => r.slot === slot);
+      const grid = el('div', { className: 'gPhotos' });
+      for (const j of joins.filter(j => j.slot === slot)) {
+        const img = el('img', { alt: `${j.name} 上傳的合照` });
+        const a = el('a', { target: '_blank', rel: 'noopener' }, img);
+        photoUrl(j.photo).then(u => { img.src = a.href = u }, () => { a.textContent = '照片讀取失敗' });
+        const t = new Date(j.created_at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+        grid.append(el('figure', {}, a, el('figcaption', { textContent: `${j.name}${j.partner ? `（和 ${j.partner}）` : ''}・${t}` })));
+      }
+      rounds.push(el('section', { className: 'gRound' },
+        el('h3', { textContent: `第 ${slot + 1} 輪` }, el('small', { textContent: res ? `完成：${res.pair.join('、')}，${res.revived} 復活` : '還沒完成' })),
+        grid));
+    }
+    list.replaceChildren(...rounds);
+  } catch (e) { list.textContent = '讀取失敗，請按重新整理：' + e.message }
+}
+$('photosBtn').onclick = () => { $('gallery').hidden = false; loadGallery() };
+$('gRefresh').onclick = loadGallery;
+$('gClose').onclick = () => { $('gallery').hidden = true };
+
 // 監控室縮圈：在主地圖上重新點範圍
 function renderEdit() {
   $('editPanel').hidden = !editPts;
@@ -697,7 +758,7 @@ $('caught').onclick = async () => {
     : '你現在是鬼了。請把 Traccar 的追蹤關掉，省電也避免露出位置。');
 };
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
-$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
+$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
