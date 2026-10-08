@@ -263,7 +263,7 @@ function rulesLines(c) {
     `身分：${c.auto_assign ? '系統隨機分配' : '每個人自己選'}`,
     `人被抓到後：${c.caught_to_ghost ? '變成鬼' : '出局'}`,
     `人${c.show_ghosts ? '看得到' : '看不到'}鬼的位置`,
-    c.area && `活動範圍：限定（地圖上的綠色框）`,
+    c.area && `活動範圍：限定（地圖上的橘色框）`,
     c.ghost_start_at && `鬼開始抓人：${hm(c.ghost_start_at)}`,
     c.end_at && `遊戲結束：${hm(c.end_at)}`,
     c.rules?.revive && (c.rules.revive.manual ? '特殊規則：復活任務（由監控室發起）'
@@ -285,7 +285,8 @@ $('join').onclick = () => enterRoom($('joinCode').value);
 $('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
 // 活動範圍：房主依序點頂點，連成多邊形
 let areaMap, areaLayer, areaPts = [];
-const AREA_STYLE = { color: '#1f6b47', weight: 3, dashArray: '8 6', fillOpacity: .06 };
+const COLOR = { human: '#2f9e44', ghost: '#e03131', stale: '#888', area: '#f08c00' };
+const AREA_STYLE = { color: COLOR.area, weight: 3, dashArray: '8 6', fillOpacity: .06 };
 function drawArea() {
   $('areaBox').hidden = !$('arYes').checked;
   $('areaCount').textContent = `已點 ${areaPts.length} 點` + (areaPts.length && areaPts.length < 3 ? '，還要再點' : '');
@@ -304,7 +305,7 @@ function renderPts(layer, pts) {
   layer.clearLayers();
   if (pts.length >= 3) L.polygon(pts, AREA_STYLE).addTo(layer);
   else if (pts.length === 2) L.polyline(pts, AREA_STYLE).addTo(layer);
-  pts.forEach((p, i) => L.circleMarker(p, { radius: 6, color: '#fff', weight: 2, fillColor: '#1f6b47', fillOpacity: 1 })
+  pts.forEach((p, i) => L.circleMarker(p, { radius: 6, color: '#fff', weight: 2, fillColor: COLOR.area, fillOpacity: 1 })
     .bindTooltip(String(i + 1), { permanent: true, direction: 'center', className: 'tag', opacity: .9 }).addTo(layer));
 }
 const ptOf = e => [+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)];
@@ -449,7 +450,7 @@ async function poll() {
       const changed = st.areaKey !== undefined && st.areaKey !== key;
       if (gameArea && (firstDraw || changed)) map.fitBounds(gameArea.getBounds().pad(0.1));
       st.areaKey = key; store.set(st);
-      if (changed) { navigator.vibrate?.([300, 100, 300]); alert('縮圈！活動範圍已經更新，請看地圖上的綠色框。') }
+      if (changed) { navigator.vibrate?.([300, 100, 300]); alert('縮圈！活動範圍已經更新，請看地圖上的橘色框。') }
     }
     const rows = await pr.json(), seen = new Set(), list = [];
     players = rows.filter(p => p.role !== 'monitor'); // 監控室不參與分配
@@ -469,12 +470,13 @@ async function poll() {
       const mine = p === me, ghost = p.role === 'ghost';
       const visible = canSee(p), located = visible && p.lat != null;
       const s = ago(p.updated_at), stale = s > STALE_S;
-      const color = !located || stale ? '#888' : ghost ? '#6b3fa0' : mine ? '#1f6b47' : '#b3261e';
+      // 地圖顏色：人綠、鬼紅、太久沒更新灰；自己另外加一圈虛線
+      const color = !located || stale ? COLOR.stale : ghost ? COLOR.ghost : COLOR.human;
       // 上方列表
       const chip = document.createElement('button');
       chip.className = 'chip' + (mine ? ' me' : '');
       chip.innerHTML = '<i></i><b></b><small></small>';
-      chip.querySelector('i').style.background = ghost && !located ? '#6b3fa0' : color;
+      chip.querySelector('i').style.background = ghost && !located ? COLOR.ghost : color;
       chip.querySelector('b').textContent = p.name + (mine ? '（你）' : '');
       chip.querySelector('small').textContent =
         !ghost && p.caught ? '人・出局' :
@@ -492,14 +494,18 @@ async function poll() {
       let m = markers.get(p.name);
       if (!m) {
         m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color, fillOpacity: .08 }).addTo(map) };
+        if (mine) m.self = L.circleMarker([p.lat, p.lng], { radius: 16, color, weight: 2.5, dashArray: '4 4', fill: false, interactive: false }).addTo(map);
         m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -8] });
         markers.set(p.name, m);
       } else {
         m.dot.setLatLng([p.lat, p.lng]).setStyle(style).setTooltipContent(label);
         m.ring.setLatLng([p.lat, p.lng]).setRadius(p.acc || 0).setStyle({ color });
+        m.self?.setLatLng([p.lat, p.lng]).setStyle({ color });
       }
     }
-    for (const [k, m] of markers) if (!seen.has(k)) { m.dot.remove(); m.ring.remove(); markers.delete(k) }
+    for (const [k, m] of markers) if (!seen.has(k)) { m.dot.remove(); m.ring.remove(); m.self?.remove(); markers.delete(k) }
+    // 藍點（手機瀏覽器定位）只在自己沒有回報位置時顯示，避免地圖上有兩個「你」
+    if (meDot) seen.has(st.name) ? meDot.remove() : meDot.addTo(map);
     $('players').replaceChildren(...list);
     await missionPoll(rows, me);
     // 房主開始面板
