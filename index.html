@@ -56,7 +56,7 @@
       <li>安裝免費的 <b>Traccar Client</b>（<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a>）。</li>
       <li>「伺服器網址」填：<br><code id="srv">https://ielczttxqhgmpefbolvb.supabase.co/functions/v1/traccar</code> <button id="copySrv" type="button">複製</button></li>
       <li>「裝置識別碼」改成 <code>房間代碼-暱稱</code>，例如 <code id="devEx">ntu-小明</code>。</li>
-      <li>定位精確度選「高」，間隔（Interval）設 10 秒，距離（Distance）設 0，<b>停止偵測（Stop detection）關閉</b>，心跳（Heartbeat）設 60 秒。不關停止偵測的話，靜止不動 1 分鐘後就不會再回報。</li>
+      <li>定位精確度選「高」，距離設 5 公尺，靜止時回報間隔設 60 秒。打開「進階設定」，把<b>靜止偵測關閉</b>、保持處理器喚醒打開。App 只在移動時回報，站著不動時位置不會更新，但最後的位置還是對的。</li>
       <li>打開追蹤開關。定位權限選「永遠允許」（iOS）或「一律允許」（Android），並允許在背景執行、關閉省電限制。</li>
       <li>遊戲結束記得把追蹤開關關掉。</li>
     </ol>
@@ -81,7 +81,8 @@ const API = 'https://ielczttxqhgmpefbolvb.supabase.co/rest/v1/tag_players';
 const KEY = 'sb_publishable_7N33sjVdcGN_qMyLYcnZOQ_Em74n49h';
 const H = { apikey: KEY, 'Content-Type': 'application/json' };
 const NTU = [25.0174, 121.5397];
-const STALE_S = 60, HIDE_S = 30 * 60, PUSH_MS = 5000, POLL_MS = 5000;
+// App 靜止時不回報（Android 會把心跳拖到數分鐘），所以 10 分鐘沒更新才變灰；標籤的「幾分前」才是準的
+const STALE_S = 600, HIDE_S = 30 * 60, PUSH_MS = 5000, POLL_MS = 5000;
 const $ = id => document.getElementById(id);
 const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } };
 
