@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>台大鬼抓人</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#f3f5f1; --fg:#1d2420; --muted:#66706a; --line:#cfd6cf; --card:#fff; --accent:#1f6b47; --ghost:#b3261e; color-scheme:light }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141916; --fg:#e6ebe7; --muted:#9aa49d; --line:#2f3832; --card:#1c231f; --accent:#5fbf8c; --ghost:#ff7a6e; color-scheme:dark } }
+  * { box-sizing:border-box }
+  [hidden] { display:none !important }
+  html,body { height:100%; margin:0 }
+  body { background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,"Noto Sans TC","PingFang TC",sans-serif }
+  main { max-width:480px; margin:0 auto; padding:24px 16px; display:grid; gap:16px }
+  h1 { margin:0; font-size:28px }
+  p { margin:0 }
+  .muted { color:var(--muted); font-size:14px }
+  label { display:grid; gap:4px; font-size:14px; color:var(--muted) }
+  input { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
+  .roles { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+  button { font:inherit; font-weight:600; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
+  button.ghost { background:var(--ghost); border-color:var(--ghost); color:#fff }
+  button:focus-visible, input:focus-visible { outline:3px solid var(--accent); outline-offset:2px }
+  .status { padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card); font-variant-numeric:tabular-nums }
+  #mapView { position:fixed; inset:0; display:flex; flex-direction:column }
+  #mapBar { display:flex; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
+  #mapBar span { flex:1; min-width:0 }
+  #mapBar button { padding:6px 10px }
+  #map { flex:1 }
+  .tag { font-weight:600 }
+  .stale { opacity:.5 }
+</style>
+</head>
+<body>
+
+<main id="joinView">
+  <h1>台大鬼抓人</h1>
+  <p class="muted">人：分享自己的位置。鬼：看地圖上所有人的位置。同一場遊戲請用同一個房間代碼。</p>
+  <label for="room">房間代碼<input id="room" maxlength="30" value="ntu"></label>
+  <label for="name">暱稱<input id="name" maxlength="20" placeholder="例如：小明"></label>
+  <div class="roles">
+    <button id="asHuman" class="primary">我是人（分享定位）</button>
+    <button id="asGhost" class="ghost">我是鬼（看地圖）</button>
+  </div>
+  <p class="muted">分享期間會把你的 GPS 位置傳給同房間的鬼。按「停止分享」或關掉頁面後，位置會刪除或在 30 分鐘後不再顯示。</p>
+</main>
+
+<main id="humanView" hidden>
+  <h1>正在分享定位</h1>
+  <div class="status" id="hStatus">等待定位授權…</div>
+  <p class="muted">請保持這個頁面開著、螢幕亮著。手機鎖屏或切到別的 App 時，瀏覽器會停止回報位置。</p>
+  <button id="stop">停止分享並離開</button>
+</main>
+
+<div id="mapView" hidden>
+  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="leave">離開</button></div>
+  <div id="map"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const API = 'https://ielczttxqhgmpefbolvb.supabase.co/rest/v1/tag_players';
+const KEY = 'sb_publishable_7N33sjVdcGN_qMyLYcnZOQ_Em74n49h';
+const H = { apikey: KEY, 'Content-Type': 'application/json' };
+const NTU = [25.0174, 121.5397];
+const STALE_S = 60, HIDE_S = 30 * 60, PUSH_MS = 5000, POLL_MS = 5000;
+const $ = id => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } }, set(k, v) { try { localStorage.setItem(k, v) } catch {} } };
+
+let myId = store.get('tagId') || (crypto.randomUUID?.() ?? '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+store.set('tagId', myId);
+$('name').value = store.get('tagName') || '';
+$('room').value = store.get('tagRoom') || 'ntu';
+
+function form() {
+  const room = $('room').value.trim(), name = $('name').value.trim();
+  store.set('tagRoom', room); store.set('tagName', name);
+  return { room, name };
+}
+function ago(iso) { return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)) }
+let wake;
+async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
+
+// ---------- 人 ----------
+let watchId, lastPush = 0, pending;
+$('asHuman').onclick = () => {
+  const { room, name } = form();
+  if (!room || !name) return alert('請填房間代碼和暱稱');
+  if (!navigator.geolocation) return alert('這個瀏覽器不支援定位');
+  $('joinView').hidden = true; $('humanView').hidden = false;
+  keepAwake();
+  watchId = navigator.geolocation.watchPosition(p => {
+    pending = { id: myId, room, name, lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, updated_at: new Date().toISOString() };
+    if (Date.now() - lastPush >= PUSH_MS) push();
+  }, e => {
+    $('hStatus').textContent = e.code === 1 ? '你拒絕了定位權限。請到瀏覽器設定允許這個網站使用位置，再重新整理。' : '定位失敗：' + e.message;
+  }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 });
+  // ponytail: 靜止不動時 watchPosition 可能不觸發，定時重送最後位置讓鬼知道你還在線
+  setInterval(() => { if (pending) { pending.updated_at = new Date().toISOString(); push() } }, 20000);
+};
+async function push() {
+  lastPush = Date.now();
+  const body = pending;
+  try {
+    const r = await fetch(API + '?on_conflict=id', { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    $('hStatus').textContent = `已回報 ${new Date().toLocaleTimeString()}｜精度約 ${Math.round(body.acc)} 公尺`;
+  } catch (e) { $('hStatus').textContent = '上傳失敗，會自動重試：' + e.message }
+}
+$('stop').onclick = async () => {
+  navigator.geolocation.clearWatch(watchId);
+  try { await fetch(API + '?id=eq.' + myId, { method: 'DELETE', headers: H }) } catch {}
+  location.reload();
+};
+
+// ---------- 鬼 ----------
+let map, markers = new Map(), meDot, room;
+$('asGhost').onclick = () => {
+  room = form().room;
+  if (!room) return alert('請填房間代碼');
+  $('joinView').hidden = true; $('mapView').hidden = false;
+  keepAwake();
+  map = L.map('map').setView(NTU, 16);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+  // 鬼自己的位置只顯示在自己的地圖上，不上傳
+  navigator.geolocation?.watchPosition(p => {
+    const ll = [p.coords.latitude, p.coords.longitude];
+    if (!meDot) meDot = L.circleMarker(ll, { radius: 8, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1 }).addTo(map).bindTooltip('你');
+    else meDot.setLatLng(ll);
+  }, () => {}, { enableHighAccuracy: true });
+  poll(); setInterval(poll, POLL_MS);
+};
+async function poll() {
+  try {
+    const since = new Date(Date.now() - HIDE_S * 1000).toISOString();
+    const r = await fetch(`${API}?room=eq.${encodeURIComponent(room)}&updated_at=gte.${since}&select=id,name,lat,lng,acc,updated_at`, { headers: H });
+    if (!r.ok) throw new Error(r.status);
+    const rows = await r.json(), seen = new Set();
+    let live = 0;
+    for (const p of rows) {
+      seen.add(p.id);
+      const s = ago(p.updated_at), stale = s > STALE_S;
+      if (!stale) live++;
+      const label = document.createElement('span');
+      label.className = 'tag'; label.textContent = `${p.name}・${s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分前'}`;
+      const style = { radius: 9, color: '#fff', weight: 2, fillColor: stale ? '#888' : '#b3261e', fillOpacity: 1 };
+      let m = markers.get(p.id);
+      if (!m) {
+        m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color: '#b3261e', fillOpacity: .08 }).addTo(map) };
+        m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -8] });
+        markers.set(p.id, m);
+      } else {
+        m.dot.setLatLng([p.lat, p.lng]).setStyle(style).setTooltipContent(label);
+        m.ring.setLatLng([p.lat, p.lng]).setRadius(p.acc || 0);
+      }
+    }
+    for (const [id, m] of markers) if (!seen.has(id)) { m.dot.remove(); m.ring.remove(); markers.delete(id) }
+    $('gStatus').textContent = `房間「${room}」｜在線 ${live} 人，共 ${rows.length} 人｜${new Date().toLocaleTimeString()}`;
+  } catch (e) { $('gStatus').textContent = '讀取失敗，會自動重試：' + e.message }
+}
+$('fit').onclick = () => {
+  const pts = [...markers.values()].map(m => m.dot.getLatLng());
+  if (meDot) pts.push(meDot.getLatLng());
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
+};
+$('leave').onclick = () => location.reload();
+</script>
+</body>
+</html>
