@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鬼抓人模擬測試</title>
+<style>
+  :root { --bg:#f3f5f1; --fg:#1d2420; --muted:#66706a; --line:#cfd6cf; --card:#fff; --accent:#1f6b47; --warn:#e03131; color-scheme:light }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141916; --fg:#e6ebe7; --muted:#9aa49d; --line:#2f3832; --card:#1c231f; --accent:#5fbf8c; --warn:#ff8787; color-scheme:dark } }
+  * { box-sizing:border-box }
+  [hidden] { display:none !important }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,"Noto Sans TC","PingFang TC",sans-serif; display:flex; min-height:100vh }
+  aside { width:340px; flex:none; padding:16px; border-right:1px solid var(--line); background:var(--card); display:flex; flex-direction:column; gap:10px; height:100vh; position:sticky; top:0; overflow-y:auto }
+  h1 { margin:0; font-size:20px }
+  h2 { margin:8px 0 0; font-size:14px; color:var(--muted); font-weight:600 }
+  p { margin:0 }
+  .muted { color:var(--muted); font-size:13px }
+  label { display:flex; gap:6px; align-items:center }
+  input[type=text], input[type=number], select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); min-width:0 }
+  input[type=text] { flex:1 }
+  input[type=number] { width:5em }
+  button { font:inherit; font-weight:600; padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; text-align:left }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; text-align:center }
+  button:disabled { opacity:.5; cursor:default }
+  .btns { display:grid; gap:6px }
+  #log { margin:0; padding:0 0 0 18px; display:grid; gap:4px; font-size:12px; overflow-y:auto; flex:1; min-height:160px }
+  #log li.warn { color:var(--warn) }
+  #log li.note { color:var(--accent) }
+  main { flex:1; padding:16px; display:flex; flex-wrap:wrap; gap:16px; align-content:flex-start; min-width:0 }
+  .phone { width:236px; display:grid; gap:4px }
+  .phone header { display:flex; gap:6px; align-items:baseline; font-size:13px }
+  .phone header b { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .os { font-size:11px; padding:0 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted) }
+  .phone .state { font-size:12px; color:var(--muted); min-height:1.5em }
+  .screen { width:236px; height:419px; overflow:hidden; border-radius:16px; border:6px solid #222; background:#000 }
+  .screen iframe { width:375px; height:667px; border:0; transform:scale(.6); transform-origin:0 0; background:var(--bg) }
+</style>
+</head>
+<body>
+<aside>
+  <h1>鬼抓人模擬測試</h1>
+  <p class="muted">一次開 1 監控室、4 鬼、4 人（安卓、iOS 交錯）。每支「手機」都是真的遊戲頁，位置走真的 Traccar 接收端。</p>
+  <label>房號 <input type="text" id="room"></label>
+  <label><input type="checkbox" id="ctg">被抓變成鬼（不勾＝出局，可以測復活任務）</label>
+  <label><input type="checkbox" id="sg" checked>人看得到鬼（鬼也回報位置）</label>
+  <label>遊戲時間 <input type="number" id="endMin" value="20" min="1">分鐘</label>
+  <button id="setup" class="primary">建立模擬</button>
+  <div class="btns" id="ctrl" hidden>
+    <button id="run">⏸ 暫停</button>
+    <label><input type="checkbox" id="chase" checked>鬼自動追人，15 公尺內自動抓到</label>
+    <label>移動速度 <select id="speed"><option value="1">1 倍</option><option value="3" selected>3 倍</option><option value="10">10 倍</option></select></label>
+    <h2>情境</h2>
+    <button id="catchOne">抓一個人</button>
+    <button id="shrink">監控室縮圈（縮成 70%）</button>
+    <button id="launch">監控室發起復活任務</button>
+    <button id="finish">兩個人完成復活任務（含上傳合照）</button>
+    <button id="iosGap">iOS 玩家全部進背景 3 分鐘</button>
+    <button id="cleanup">結束並清除模擬資料</button>
+  </div>
+  <h2>紀錄</h2>
+  <ol id="log" reversed></ol>
+</aside>
+<main id="frames"></main>
+
+<script>
+const B = 'https://ielczttxqhgmpefbolvb.supabase.co', REST = B + '/rest/v1/', TRACCAR = B + '/functions/v1/traccar';
+const PHOTOS = B + '/storage/v1/object/tag-photos/';
+const KEY = 'sb_publishable_7N33sjVdcGN_qMyLYcnZOQ_Em74n49h';
+const H = { apikey: KEY, 'Content-Type': 'application/json' };
+const AREA = [[25.0205, 121.5335], [25.0205, 121.5440], [25.0135, 121.5440], [25.0135, 121.5335]]; // 台大本部
+const REPORT_MS = 10000, CATCH_M = 15;
+const $ = id => document.getElementById(id), q = encodeURIComponent, rand = Math.random;
+// 安卓、iOS 交錯
+const BOTS = [{ name: '監控室', role: 'monitor', os: 'web' },
+  ...[1, 2, 3, 4].map(i => ({ name: `鬼${i}(${i % 2 ? '安卓' : 'iOS'})`, role: 'ghost', os: i % 2 ? 'android' : 'ios' })),
+  ...[1, 2, 3, 4].map(i => ({ name: `人${i}(${i % 2 ? 'iOS' : '安卓'})`, role: 'human', os: i % 2 ? 'ios' : 'android' }))];
+let room, ctg, sg, bots = [], area = AREA, running = true, timers = [];
+
+async function api(path, { method = 'GET', body, prefer } = {}) {
+  const r = await fetch(REST + path, { method, headers: prefer ? { ...H, Prefer: prefer } : H, body: body && JSON.stringify(body) });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`${r.status} ${t}`);
+  return t ? JSON.parse(t) : null;
+}
+function log(msg, cls = '') {
+  const li = Object.assign(document.createElement('li'), { textContent: `${new Date().toLocaleTimeString('zh-TW', { hour12: false })} ${msg}`, className: cls });
+  $('log').prepend(li);
+}
+$('room').value = 'SIM' + Math.random().toString(36).slice(2, 6).toUpperCase();
+
+// ---------- 幾何 ----------
+const M = 111320;
+const dist = (a, b) => Math.hypot((a.lat - b.lat) * M, (a.lng - b.lng) * M * Math.cos(a.lat * Math.PI / 180));
+const nearest = (b, list) => list.reduce((best, x) => (!best || dist(b, x) < dist(b, best) ? x : best), null);
+function move(b, angle, m) {
+  b.lat += Math.cos(angle) * m / M;
+  b.lng += Math.sin(angle) * m / (M * Math.cos(b.lat * Math.PI / 180));
+  // 超出範圍就拉回範圍裡（縮圈後人會往裡面走）
+  const la = area.map(p => p[0]), ln = area.map(p => p[1]);
+  b.lat = Math.min(Math.max(b.lat, Math.min(...la)), Math.max(...la));
+  b.lng = Math.min(Math.max(b.lng, Math.min(...ln)), Math.max(...ln));
+}
+const toward = (a, b) => Math.atan2((b.lng - a.lng) * Math.cos(a.lat * Math.PI / 180), b.lat - a.lat);
+const reports = b => b.role === 'human' ? !b.caught : b.role === 'ghost' && sg;
+
+// ---------- 建立 ----------
+$('setup').onclick = async () => {
+  room = $('room').value.trim().toUpperCase();
+  if (!/^SIM[0-9A-Z]+$/.test(room)) return log('房號要用 SIM 開頭的英數字，清除功能只認這種房號', 'warn');
+  ctg = $('ctg').checked; sg = $('sg').checked; area = AREA;
+  running = true; $('run').textContent = '⏸ 暫停'; // 上一場清除時會停掉
+  $('setup').disabled = true;
+  try {
+    await api('tag_rooms', { method: 'POST', body: {
+      room, caught_to_ghost: ctg, show_ghosts: sg, auto_assign: false, area: AREA,
+      end_at: new Date(Date.now() + $('endMin').value * 60e3).toISOString(),
+      rules: ctg ? {} : { revive: { manual: true } },
+    } });
+    const [cfg] = await api(`tag_rooms?room=eq.${q(room)}`);
+    const c = { lat: 25.0170, lng: 121.5375 }; // 鬼從傅鐘附近出發
+    bots = BOTS.map(b => ({ ...b, caught: false, gapUntil: 0, wander: rand() * 7,
+      lat: b.role === 'ghost' ? c.lat + (rand() - .5) * .0005 : 25.0140 + rand() * .006,
+      lng: b.role === 'ghost' ? c.lng + (rand() - .5) * .0005 : 121.5340 + rand() * .0095 }));
+    await api('tag_players?on_conflict=room,name', { method: 'POST', prefer: 'resolution=merge-duplicates', body: bots.map(b => ({ room, name: b.name, role: b.role })) });
+    for (const b of bots) {
+      localStorage.setItem('tag:' + b.name, JSON.stringify({ room, name: b.name, role: b.role, step: 'map', cfg, host: b.role === 'monitor', monitor: b.role === 'monitor' }));
+      $('frames').append(phone(b));
+    }
+    log(`建立房間 ${room}：被抓${ctg ? '變成鬼' : '出局'}、人${sg ? '看得到' : '看不到'}鬼、${$('endMin').value} 分鐘後結束`, 'note');
+    $('ctrl').hidden = false;
+    bots.forEach((b, i) => setTimeout(() => report(b), i * 300));
+    timers.push(setInterval(step, 1000), setInterval(() => bots.forEach(report), REPORT_MS), setInterval(sync, 5000));
+  } catch (e) { log('建立失敗：' + e.message, 'warn'); $('setup').disabled = false }
+};
+function phone(b) {
+  const el = document.createElement('section');
+  el.className = 'phone';
+  el.innerHTML = `<header><b></b><span class="os"></span></header><div class="screen"><iframe></iframe></div><div class="state"></div>`;
+  el.querySelector('b').textContent = b.name;
+  el.querySelector('.os').textContent = b.os === 'web' ? '只看地圖' : b.os === 'ios' ? 'iOS・查詢參數格式' : '安卓・JSON 格式';
+  el.querySelector('iframe').src = `index.html?sim=${q(b.name)}`;
+  b.el = el;
+  return el;
+}
+function showState(b) {
+  if (!b.el) return;
+  const s = b.role === 'monitor' ? '不用定位'
+    : b.role === 'human' && b.caught ? '出局，停止回報'
+    : !reports(b) ? '鬼，不用回報'
+    : Date.now() < b.gapUntil ? `iOS 背景中，${Math.ceil((b.gapUntil - Date.now()) / 1000)} 秒後恢復`
+    : b.last || '等待回報';
+  b.el.querySelector('.state').textContent = `${b.role === 'ghost' ? '鬼' : b.role === 'human' ? '人' : '監控室'}｜${s}`;
+}
+
+// ---------- 移動、抓人 ----------
+function step() {
+  if (!running) return;
+  const dt = +$('speed').value, alive = bots.filter(b => b.role === 'human' && !b.caught);
+  for (const b of bots) {
+    if (b.role === 'monitor' || (b.role === 'human' && b.caught)) continue;
+    let angle;
+    if (b.role === 'ghost' && $('chase').checked && alive.length) angle = toward(b, nearest(b, alive));
+    if (b.role === 'human') { const g = nearest(b, bots.filter(x => x.role === 'ghost')); if (g && dist(b, g) < 200) angle = toward(g, b) }
+    if (angle === undefined) angle = b.wander += (rand() - .5) * .6;
+    move(b, angle, (b.role === 'ghost' ? 2.4 : 2.0) * dt);
+  }
+  if ($('chase').checked) for (const g of bots.filter(x => x.role === 'ghost')) for (const h of alive) if (!h.caught && dist(g, h) < CATCH_M) catchHuman(h, g.name);
+  bots.forEach(showState);
+}
+async function catchHuman(h, by) {
+  h.caught = true; // 先標記，避免同一秒被抓兩次
+  try {
+    await api(`tag_players?room=eq.${q(room)}&name=eq.${q(h.name)}`, { method: 'PATCH', body: ctg ? { role: 'ghost', caught: true } : { caught: true } });
+    if (ctg) { h.role = 'ghost'; h.caught = false }
+    log(`${by} 抓到 ${h.name}（${ctg ? '變成鬼' : '出局'}）`, 'note');
+  } catch (e) { h.caught = false; log(`抓 ${h.name} 失敗：${e.message}`, 'warn') }
+}
+
+// ---------- 模擬 Traccar 回報 ----------
+// 安卓用新版 App 的 JSON；iOS 用 OsmAnd 查詢參數，並且會隨機進背景停止回報（iOS 常見的狀況）
+async function report(b) {
+  if (!running || !reports(b) || Date.now() < b.gapUntil) return showState(b);
+  if (b.os === 'ios' && rand() < .04) {
+    b.gapUntil = Date.now() + (120 + rand() * 120) * 1000;
+    log(`${b.name} 進入背景，暫停回報 ${Math.round((b.gapUntil - Date.now()) / 60000)} 分鐘`);
+    return showState(b);
+  }
+  const dev = `${room}-${b.name}`, acc = b.os === 'ios' ? 8 + rand() * 25 : 4 + rand() * 12;
+  try {
+    const r = b.os === 'ios'
+      ? await fetch(`${TRACCAR}?id=${q(dev)}&lat=${b.lat.toFixed(6)}&lon=${b.lng.toFixed(6)}&timestamp=${Math.floor(Date.now() / 1000)}&accuracy=${acc.toFixed(1)}&speed=1`, { method: 'POST' })
+      : await fetch(TRACCAR, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          device_id: dev, location: { timestamp: new Date().toISOString(), is_moving: true, coords: { latitude: b.lat, longitude: b.lng, accuracy: acc, speed: 1.5, heading: 0 }, battery: { level: .8, is_charging: false } } }) });
+    b.last = r.ok ? `已回報 ${new Date().toLocaleTimeString('zh-TW', { hour12: false })}` : `回報失敗 ${r.status}`;
+    if (!r.ok) log(`${b.name} 回報失敗：${r.status} ${await r.text()}`, 'warn');
+  } catch (e) { b.last = '回報失敗'; log(`${b.name} 回報失敗：${e.message}`, 'warn') }
+  showState(b);
+}
+
+// 跟資料庫同步：有人在手機畫面按了「我被抓了」、或被復活
+async function sync() {
+  try {
+    const rows = await api(`tag_players?room=eq.${q(room)}&select=name,role,caught`);
+    for (const r of rows) {
+      const b = bots.find(x => x.name === r.name); if (!b) continue;
+      const out = r.role === 'human' && r.caught;
+      if (b.role === 'human' && b.caught && !out) log(`${b.name} 被復活了，恢復回報`, 'note');
+      b.role = r.role; b.caught = out;
+    }
+    const [cfg] = await api(`tag_rooms?room=eq.${q(room)}&select=area`);
+    if (cfg?.area) area = cfg.area;
+  } catch (e) { log('同步失敗：' + e.message, 'warn') }
+}
+
+// ---------- 情境 ----------
+$('run').onclick = () => { running = !running; $('run').textContent = running ? '⏸ 暫停' : '▶ 繼續'; log(running ? '繼續' : '暫停') };
+$('catchOne').onclick = () => {
+  const h = bots.filter(b => b.role === 'human' && !b.caught);
+  if (!h.length) return log('沒有還活著的人了', 'warn');
+  catchHuman(h[Math.floor(rand() * h.length)], '手動');
+};
+$('shrink').onclick = async () => {
+  const cx = area.reduce((s, p) => s + p[0], 0) / area.length, cy = area.reduce((s, p) => s + p[1], 0) / area.length;
+  const next = area.map(([a, b]) => [+(cx + (a - cx) * .7).toFixed(6), +(cy + (b - cy) * .7).toFixed(6)]);
+  try { await api(`tag_rooms?room=eq.${q(room)}`, { method: 'PATCH', body: { area: next } }); area = next; log('監控室縮圈：範圍縮成 70%', 'note') }
+  catch (e) { log('縮圈失敗：' + e.message, 'warn') }
+};
+$('launch').onclick = async () => {
+  if (ctg) return log('這個房間是「被抓變成鬼」，沒有復活任務', 'warn');
+  try {
+    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slot`);
+    await api(`tag_rooms?room=eq.${q(room)}`, { method: 'PATCH', body: { mission_slot: (r.mission_slot ?? -1) + 1 } });
+    log(`監控室發起第 ${(r.mission_slot ?? -1) + 2} 輪復活任務`, 'note');
+  } catch (e) { log('發起失敗：' + e.message, 'warn') }
+};
+$('finish').onclick = async () => {
+  try {
+    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slot`);
+    if (r.mission_slot == null) return log('要先按「監控室發起復活任務」', 'warn');
+    const pair = bots.filter(b => b.role === 'human' && !b.caught).sort(() => rand() - .5).slice(0, 2);
+    if (pair.length < 2) return log('還活著的人不到 2 個，做不了任務', 'warn');
+    const slot = r.mission_slot, paths = [];
+    for (const [i, b] of pair.entries()) {
+      const path = `sim/${room}-${slot}-${i}-${Date.now()}.jpg`;
+      const up = await fetch(PHOTOS + path, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'image/jpeg' }, body: await fakePhoto(pair) });
+      if (!up.ok) throw new Error('上傳合照失敗 ' + up.status + ' ' + await up.text());
+      paths.push(path);
+    }
+    await api('tag_mission_joins?on_conflict=room,slot,name', { method: 'POST', prefer: 'resolution=merge-duplicates', body: pair.map((b, i) => ({
+      room, slot, name: b.name, code: String(1000 + Math.floor(rand() * 9000)), partner: pair[1 - i].name, photo: paths[i] })) });
+    const revived = await api('rpc/tag_mission_finish', { method: 'POST', body: { p_room: room, p_slot: slot } });
+    log(revived ? `${pair[0].name}、${pair[1].name} 完成任務，${revived} 復活` : `${pair[0].name}、${pair[1].name} 完成任務，但沒有人可以復活（沒人出局，或這輪已經完成過）`, revived ? 'note' : 'warn');
+    sync();
+  } catch (e) { log('任務失敗：' + e.message, 'warn') }
+};
+function fakePhoto(pair) {
+  const c = Object.assign(document.createElement('canvas'), { width: 480, height: 640 }), g = c.getContext('2d');
+  g.fillStyle = `hsl(${rand() * 360} 45% 45%)`; g.fillRect(0, 0, 480, 640);
+  g.fillStyle = '#fff'; g.font = 'bold 36px sans-serif'; g.textAlign = 'center';
+  g.fillText('模擬合照', 240, 280); g.fillText(pair.map(b => b.name.split('(')[0]).join(' + '), 240, 340);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', .8));
+}
+$('iosGap').onclick = () => {
+  for (const b of bots.filter(b => b.os === 'ios' && reports(b))) b.gapUntil = Date.now() + 180e3;
+  log('iOS 玩家全部進背景 3 分鐘（地圖上應該看到他們的「幾秒前」一直變大）', 'note');
+};
+$('cleanup').onclick = async () => {
+  timers.forEach(clearInterval); timers = []; running = false;
+  try {
+    await api('rpc/tag_sim_cleanup', { method: 'POST', body: { p_room: room } });
+    const list = await (await fetch(B + '/storage/v1/object/list/tag-photos', { method: 'POST', headers: H, body: JSON.stringify({ prefix: 'sim/', search: room, limit: 1000 }) })).json();
+    const names = list.filter(f => f.name.startsWith(room + '-')).map(f => 'sim/' + f.name);
+    if (names.length) await fetch(PHOTOS.slice(0, -1), { method: 'DELETE', headers: H, body: JSON.stringify({ prefixes: names }) });
+    for (const b of bots) localStorage.removeItem('tag:' + b.name);
+    $('frames').replaceChildren(); $('ctrl').hidden = true; $('setup').disabled = false;
+    $('room').value = 'SIM' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    log(`已清除房間 ${room} 的資料和 ${names.length} 張模擬合照`, 'note');
+  } catch (e) { log('清除失敗：' + e.message, 'warn') }
+};
+
+// 每支手機收到的通知（遊戲頁在模擬模式會把 alert 轉成訊息傳過來）
+addEventListener('message', e => {
+  if (e.origin !== location.origin || !e.data?.sim) return;
+  log(`［${e.data.sim}］收到通知：${e.data.msg.split('\n').filter(Boolean).slice(0, 2).join(' ')}`);
+});
+</script>
+</body>
+</html>

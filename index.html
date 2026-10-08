@@ -44,7 +44,6 @@
   #missionPanel b.code { font-size:22px; letter-spacing:.15em; font-variant-numeric:tabular-nums }
   #missionPanel input[type=text] { width:6em; letter-spacing:.15em; text-align:center }
   #missionPanel input[type=file] { flex:1 1 12em; min-width:0; font-size:13px }
-  .mcd { font-variant-numeric:tabular-nums }
   #gallery { position:absolute; inset:0; z-index:2000; overflow-y:auto; background:var(--bg); padding:0 16px calc(16px + env(safe-area-inset-bottom,0px)) }
   .gHead { position:sticky; top:0; display:flex; gap:8px; align-items:center; padding:12px 0; padding-top:calc(12px + env(safe-area-inset-top,0px)); background:var(--bg); border-bottom:1px solid var(--line) }
   .gHead b { flex:1; font-size:18px }
@@ -69,7 +68,11 @@
   #mapView { position:fixed; inset:0; display:flex; flex-direction:column }
   #mapBar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
   #gStatus { flex:1 1 100%; min-width:0 }
-  #clock { font-weight:700; font-variant-numeric:tabular-nums }
+  #timers { display:flex; flex-wrap:wrap; gap:8px; padding:6px 12px; background:var(--card); border-bottom:1px solid var(--line) }
+  .timer { display:flex; align-items:baseline; gap:6px; padding:3px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); font-size:13px; color:var(--muted) }
+  .timer b { font-size:20px; color:var(--fg); font-variant-numeric:tabular-nums }
+  .timer.urgent b { color:#e03131 }
+  .simToast { position:fixed; left:8px; right:8px; bottom:8px; z-index:3000; padding:8px 10px; border-radius:8px; background:#1d2420; color:#fff; font-size:13px; white-space:pre-line; box-shadow:0 2px 8px #0006 }
   #mapBar button { padding:6px 10px }
   #mapBar #caught { margin-left:auto }
   .panel { display:flex; flex-wrap:wrap; gap:8px; align-items:end; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
@@ -197,7 +200,8 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="photosBtn" hidden>合照</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="photosBtn" hidden>合照</button><button id="leave">離開</button></div>
+  <div id="timers" hidden></div>
   <div id="editPanel" class="panel" hidden>
     <p>在地圖上依序點出新範圍的每個角（至少 3 點）。灰色點線是目前的範圍。</p>
     <span id="editCount">已點 0 點</span>
@@ -229,7 +233,18 @@ const NTU = [25.0174, 121.5397];
 // App 靜止時不回報（Android 會把心跳拖到數分鐘），所以 10 分鐘沒更新才變灰；標籤的「幾分前」才是準的
 const STALE_S = 600, POLL_MS = 5000;
 const $ = id => document.getElementById(id);
-const store = { get() { try { return JSON.parse(localStorage.getItem('tag')) || {} } catch { return {} } }, set(v) { try { localStorage.setItem('tag', JSON.stringify(v)) } catch {} } };
+// 模擬測試（sim.html）：每個 iframe 用 ?sim=名字 各存一份紀錄；通知改成頁內提示並回報給測試頁，避免 9 個對話框疊在一起
+const SIM = new URLSearchParams(location.search).get('sim');
+const SKEY = SIM ? 'tag:' + SIM : 'tag';
+if (SIM) {
+  window.alert = msg => {
+    parent.postMessage({ sim: SIM, msg: String(msg) }, location.origin);
+    const t = Object.assign(document.createElement('div'), { className: 'simToast', textContent: msg });
+    document.body.append(t); setTimeout(() => t.remove(), 6000);
+  };
+  window.confirm = () => true;
+}
+const store = { get() { try { return JSON.parse(localStorage.getItem(SKEY)) || {} } catch { return {} } }, set(v) { try { localStorage.setItem(SKEY, JSON.stringify(v)) } catch {} } };
 let st = store.get(); // { room, cfg, host, name, role, step }
 const q = s => encodeURIComponent(s);
 // 系統分配時還不知道會當人還是鬼，所以大家都先設定 App
@@ -259,7 +274,7 @@ function show(step) {
   armBack();
 }
 // 防呆：按上一頁不要直接離開網站。留一筆「陷阱」紀錄，上一頁時改成回到上一步；在地圖上則擋下來
-function armBack() { if (st.step && st.step !== 's1' && !history.state?.trap) history.pushState({ trap: 1 }, '') }
+function armBack() { if (!SIM && st.step && st.step !== 's1' && !history.state?.trap) history.pushState({ trap: 1 }, '') } // iframe 會共用測試頁的上一頁紀錄，模擬時不用
 addEventListener('popstate', () => {
   if (st.step === 'map' && !$('gallery').hidden) $('gallery').hidden = true; // 合照頁開著就先關掉
   else if (st.step === 'map') alert('你還在遊戲中。要離開房間，請按地圖上方的「離開」。');
@@ -269,7 +284,7 @@ addEventListener('popstate', () => {
 // Chrome 會略過沒有使用者操作時加的紀錄（例如重新打開網頁直接回到地圖），所以第一次點畫面時再補一次
 addEventListener('pointerdown', armBack, { passive: true });
 // 遊戲中關分頁或離開網站前先問一次（Android／電腦有效，iPhone 不支援）
-addEventListener('beforeunload', e => { if (st.step === 'map') { e.preventDefault(); e.returnValue = '' } });
+addEventListener('beforeunload', e => { if (!SIM && st.step === 'map') { e.preventDefault(); e.returnValue = '' } });
 const hm = iso => new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 function rulesLines(c) {
   return [
@@ -449,14 +464,23 @@ function dur(ms) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 const ended = () => !!st.cfg?.end_at && Date.now() >= Date.parse(st.cfg.end_at);
+// 倒數列：鬼出發、遊戲結束、復活任務，有設定的都列出來；最後一分鐘變紅
 function tick() {
-  const c = st.cfg || {}, now = Date.now();
+  const c = st.cfg || {}, now = Date.now(), items = [];
   const gs = c.ghost_start_at && Date.parse(c.ghost_start_at), end = c.end_at && Date.parse(c.end_at);
-  const text = end && now >= end ? '遊戲結束'
-    : gs && now < gs ? `鬼 ${dur(gs - now)} 後出發`
-    : end ? `剩 ${dur(end - now)}` : '';
-  $('clock').textContent = text; $('clock').hidden = !text;
-  document.querySelectorAll('.mcd').forEach(el => el.textContent = dur(Math.max(0, +el.dataset.at - now)));
+  const add = (label, at) => items.push([label, dur(at - now), at - now < 60e3]);
+  if (gs && now < gs) add('鬼出發', gs);
+  if (end && now >= end) items.push(['遊戲', '已結束', false]);
+  else if (end) add('遊戲剩', end);
+  const mc = missionClock();
+  if (mc && !mc.manual && mc.next) add(mc.slot < 0 ? '復活任務開始' : mission.done && mission.slot === mc.slot ? '下一輪任務' : '本輪任務剩', mc.next);
+  if (mc?.manual && mc.slot >= 0 && !(mission.done && mission.slot === mc.slot)) items.push(['復活任務', '進行中', false]);
+  $('timers').replaceChildren(...items.map(([label, value, urgent]) => {
+    const d = Object.assign(document.createElement('div'), { className: 'timer' + (urgent ? ' urgent' : '') });
+    d.append(Object.assign(document.createElement('span'), { textContent: label }), Object.assign(document.createElement('b'), { textContent: value }));
+    return d;
+  }));
+  $('timers').hidden = !items.length;
 }
 async function poll() {
   const room = st.room;
@@ -643,21 +667,20 @@ async function missionPoll(rows, me) {
   // 兩張照片都到了就請伺服器復活（重複呼叫也只會復活一次）
   if (mutual && mine.photo && partner.photo) { await fetch(BASE + 'rpc/tag_mission_finish', { method: 'POST', headers: H, body: JSON.stringify({ p_room: st.room, p_slot: mc.slot }) }); return }
 
-  const next = mc.next ? '，下一輪 <b class="mcd" data-at="' + mc.next + '"></b> 後' : '';
   let state, html;
   const launch = st.role === 'monitor' && mc.manual && (mc.slot < 0 || done)
     ? `<button class="primary" data-m="launch"${anyOut ? '' : ' disabled'}>發起復活任務</button>${anyOut ? '' : '<span class="muted">目前沒有人出局</span>'}` : '';
-  if (mc.slot < 0) { state = 'wait' + anyOut; html = mc.manual ? `<div>復活任務：${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : `<div>復活任務：第一輪 <b class="mcd" data-at="${mc.next}"></b> 後開始</div>` }
-  else if (done) { state = 'done' + done.revived + anyOut; html = `<div>本輪復活任務已完成（${esc(done.revived)} 復活）${next}</div>${launch}` }
-  else if (!me || !alive(me)) { state = 'watch'; html = `<div>復活任務進行中！還沒被抓的人可以兩兩碰面完成任務${next}</div>` }
-  else if (!anyOut) { state = 'none'; html = `<div>復活任務進行中，但目前沒有人出局${next}</div>` }
-  else if (!mine) { state = 'idle'; html = `<div>復活任務進行中！找另一個還沒被抓的人碰面，兩個人都按「執行任務」${next}</div><button class="primary" data-m="join">執行任務</button>` }
+  if (mc.slot < 0) { state = 'wait' + anyOut; html = mc.manual ? `<div>復活任務：${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : `<div>復活任務：第一輪開始時間看上方倒數</div>` }
+  else if (done) { state = 'done' + done.revived + anyOut; html = `<div>本輪復活任務已完成（${esc(done.revived)} 復活）</div>${launch}` }
+  else if (!me || !alive(me)) { state = 'watch'; html = `<div>復活任務進行中！還沒被抓的人可以兩兩碰面完成任務</div>` }
+  else if (!anyOut) { state = 'none'; html = `<div>復活任務進行中，但目前沒有人出局</div>` }
+  else if (!mine) { state = 'idle'; html = `<div>復活任務進行中！找另一個還沒被抓的人碰面，兩個人都按「執行任務」</div><button class="primary" data-m="join">執行任務</button>` }
   else if (!partner) { state = 'code' + mine.code; html = `<div>你的驗證碼 <b class="code">${mine.code}</b>　請對方輸入</div><div><label for="mCode" style="width:auto">輸入對方的驗證碼</label><input type="text" id="mCode" inputmode="numeric" maxlength="4" autocomplete="off"><button class="primary" data-m="pair">確認</button><button data-m="join">重來</button></div>` }
   else if (!mutual) { state = 'half' + mine.code + partner.name; html = `<div>已輸入 ${esc(partner.name)} 的驗證碼，等 ${esc(partner.name)} 輸入你的驗證碼 <b class="code">${mine.code}</b>…</div><button data-m="join">重來</button>` }
   else if (!mine.photo) { state = 'photo' + partner.name; html = `<div>配對成功！和 ${esc(partner.name)} 拍一張合照，兩個人都要各自上傳。</div><div><input type="file" id="mPhoto" accept="image/*"><button class="primary" data-m="upload">上傳</button></div>` }
   else { state = 'sent' + partner.name; html = `<div>照片已上傳，等 ${esc(partner.name)} 上傳…</div>` }
   state = mc.slot + ':' + state; // 換輪一定重畫（倒數目標會變）
-  mission = { slot: mc.slot, key: state, alive: rows.filter(alive).map(p => p.name) };
+  mission = { slot: mc.slot, key: state, alive: rows.filter(alive).map(p => p.name), done: !!done };
   // 狀態沒變就不重畫，避免打字打到一半被清掉
   if ($('missionPanel').dataset.key !== state) { $('missionPanel').dataset.key = state; $('missionPanel').innerHTML = html }
   $('missionPanel').hidden = false;
@@ -809,7 +832,7 @@ $('leave').onclick = () => {
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
-history.replaceState(null, '', location.pathname);
+history.replaceState(null, '', location.pathname + (SIM ? '?sim=' + encodeURIComponent(SIM) : ''));
 if (linkRoom && linkRoom.replace(/-/g, '').trim() !== st.room) enterRoom(linkRoom);
 else show(['s2', 's3', 'map'].includes(st.step) && st.room && st.cfg ? st.step : st.room && st.step === 'sNew' ? 'sNew' : 's1');
 </script>
