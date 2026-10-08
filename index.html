@@ -256,7 +256,20 @@ function show(step) {
       : '用 Traccar Client 回報位置，手機鎖屏也會繼續追蹤。';
   }
   if (step === 'map') startMap();
+  armBack();
 }
+// 防呆：按上一頁不要直接離開網站。留一筆「陷阱」紀錄，上一頁時改成回到上一步；在地圖上則擋下來
+function armBack() { if (st.step && st.step !== 's1' && !history.state?.trap) history.pushState({ trap: 1 }, '') }
+addEventListener('popstate', () => {
+  if (st.step === 'map' && !$('gallery').hidden) $('gallery').hidden = true; // 合照頁開著就先關掉
+  else if (st.step === 'map') alert('你還在遊戲中。要離開房間，請按地圖上方的「離開」。');
+  else { const prev = { sNew: 's1', s2: 's1', s3: 's2' }[st.step]; if (prev) return show(prev) }
+  armBack();
+});
+// Chrome 會略過沒有使用者操作時加的紀錄（例如重新打開網頁直接回到地圖），所以第一次點畫面時再補一次
+addEventListener('pointerdown', armBack, { passive: true });
+// 遊戲中關分頁或離開網站前先問一次（Android／電腦有效，iPhone 不支援）
+addEventListener('beforeunload', e => { if (st.step === 'map') { e.preventDefault(); e.returnValue = '' } });
 const hm = iso => new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 function rulesLines(c) {
   return [
@@ -372,6 +385,18 @@ async function pick(role) {
   const name = $('name').value.trim();
   if (!name) return $('name').focus();
   try {
+    // 防呆：名字已經在房間裡 = 同一個人回來（例如手機清掉了紀錄），沿用原本的身分，不要蓋掉
+    const [ex] = await (await fetch(`${API}?room=eq.${q(st.room)}&name=eq.${q(name)}&select=role,caught`, { headers: H })).json();
+    if (ex) {
+      const sameDevice = st.name === name;
+      // 只有同一支手機、自己選身分的房間、還沒被抓時，才能回頭改身分（例如按錯人／鬼）
+      const canChange = sameDevice && !st.cfg?.auto_assign && !ex.caught && ex.role !== 'monitor' && role !== 'monitor';
+      if (!canChange) {
+        if (!sameDevice && !confirm(`「${name}」已經在這個房間裡了（${ROLE[ex.role]}${ex.caught ? '，已被抓' : ''}）。\n\n是你本人要回到遊戲嗎？會用原本的身分繼續。\n不是的話請按取消，換一個名字。`)) return;
+        st.name = name; st.role = ex.role; if (ex.role === 'monitor') st.monitor = true;
+        return show(needsApp() && !(ex.role === 'human' && ex.caught) ? 's3' : 'map'); // 已出局的人不用再設定 App
+      }
+    }
     const r = await fetch(API + '?on_conflict=room,name', {
       method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' },
       body: JSON.stringify({ room: st.room, name, role })
@@ -434,12 +459,14 @@ function tick() {
   document.querySelectorAll('.mcd').forEach(el => el.textContent = dur(Math.max(0, +el.dataset.at - now)));
 }
 async function poll() {
+  const room = st.room;
   try {
     const [rr, pr] = await Promise.all([
       fetch(`${ROOMS}?room=eq.${q(st.room)}`, { headers: H }),
       fetch(`${API}?room=eq.${q(st.room)}&select=name,role,caught,lat,lng,acc,updated_at&order=role.desc,caught,name`, { headers: H }),
     ]);
     if (!rr.ok || !pr.ok) throw new Error(rr.ok ? pr.status : rr.status);
+    if (room !== st.room || st.step !== 'map') return; // 等回應的時候已經離開或換房間了
     st.cfg = (await rr.json())[0] || st.cfg || { caught_to_ghost: true, show_ghosts: false };
     // 活動範圍：有變就重畫；跟上次看到的不同就是監控室縮圈了（離線時改的，下次打開也會通知）
     const key = JSON.stringify(st.cfg.area || null);
@@ -776,7 +803,9 @@ $('caught').onclick = async () => {
     : '你現在是鬼了。請把 Traccar 的追蹤關掉，省電也避免露出位置。');
 };
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
-$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
+$('leave').onclick = () => {
+  if (!confirm(`確定要離開房間「${st.room}」？\n\n之後輸入同一個房號和名字「${st.name}」就能用原本的身分回來。`)) return;
+  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
