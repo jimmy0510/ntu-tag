@@ -56,7 +56,7 @@
       <li>安裝免費的 <b>Traccar Client</b>（<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a>）。</li>
       <li>「伺服器網址」填：<br><code id="srv">https://ielczttxqhgmpefbolvb.supabase.co/functions/v1/traccar</code> <button id="copySrv" type="button">複製</button></li>
       <li>「裝置識別碼」改成 <code>房間代碼-暱稱</code>，例如 <code id="devEx">ntu-小明</code>。</li>
-      <li>定位精確度選「高」，回報間隔設 10 秒。</li>
+      <li>定位精確度選「高」，間隔（Interval）設 10 秒，距離（Distance）設 0，<b>停止偵測（Stop detection）關閉</b>，心跳（Heartbeat）設 60 秒。不關停止偵測的話，靜止不動 1 分鐘後就不會再回報。</li>
       <li>打開追蹤開關。定位權限選「永遠允許」（iOS）或「一律允許」（Android），並允許在背景執行、關閉省電限制。</li>
       <li>遊戲結束記得把追蹤開關關掉。</li>
     </ol>
