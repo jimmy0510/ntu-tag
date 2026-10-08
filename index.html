@@ -86,6 +86,11 @@
   <h2>建立新房間</h2>
   <p class="muted">這是新房間，你是房主，由你決定規則。建立後就不能再改。</p>
   <div class="opt">
+    <span>你自己</span>
+    <label><input type="radio" name="mon" id="monNo" checked>一起玩</label>
+    <label><input type="radio" name="mon" id="monYes">當監控室（不用定位，看得到所有人的位置；鬼有回報位置的話也看得到）</label>
+  </div>
+  <div class="opt">
     <span>人和鬼怎麼決定</span>
     <label><input type="radio" name="aa" id="aaNo" checked>每個人自己選</label>
     <label><input type="radio" name="aa" id="aaYes">系統隨機分配（房主在地圖上按「遊戲開始」）</label>
@@ -131,6 +136,7 @@
     <button id="asGhost" class="ghost">我是鬼</button>
   </div>
   <button id="asPending" class="primary" hidden>加入遊戲（身分由系統分配）</button>
+  <button id="asMonitor" class="primary" hidden>進入監控室</button>
   <button class="link" data-back="s1">← 換房間</button>
 </main>
 
@@ -181,19 +187,20 @@ const store = { get() { try { return JSON.parse(localStorage.getItem('tag')) || 
 let st = store.get(); // { room, cfg, host, name, role, step }
 const q = s => encodeURIComponent(s);
 // 系統分配時還不知道會當人還是鬼，所以大家都先設定 App
-const needsApp = () => st.role !== 'ghost' || st.cfg?.show_ghosts;
-const ROLE = { human: '人', ghost: '鬼', pending: '等待分配' };
+const needsApp = () => st.role !== 'monitor' && (st.role !== 'ghost' || st.cfg?.show_ghosts);
+const ROLE = { human: '人', ghost: '鬼', pending: '等待分配', monitor: '監控室' };
 
 function show(step) {
   st.step = step; store.set(st);
   for (const id of ['s1', 'sNew', 's2', 's3']) $(id).hidden = id !== step;
   $('mapView').hidden = step !== 'map';
   $('rNew').textContent = $('r2').textContent = $('r3').textContent = st.room || '';
-  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = ''; $('arNo').checked = true; areaPts = []; drawArea() }
+  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = ''; $('arNo').checked = $('monNo').checked = true; areaPts = []; drawArea() }
   if (step === 's2') {
     $('name').value = st.name || '';
-    $('pickRole').hidden = !!st.cfg?.auto_assign;
-    $('asPending').hidden = !st.cfg?.auto_assign;
+    $('pickRole').hidden = !!st.cfg?.auto_assign || !!st.monitor;
+    $('asPending').hidden = !st.cfg?.auto_assign || !!st.monitor;
+    $('asMonitor').hidden = !st.monitor;
     roomInfo();
   }
   if (step === 's3') {
@@ -266,9 +273,9 @@ $('createRoom').onclick = async () => {
     // 同時有人建立同一個房號時，先建的規則為準；return=representation 拿到的是自己有沒有建成功
     const r = await fetch(ROOMS + '?on_conflict=room', { method: 'POST', headers: { ...H, Prefer: 'resolution=ignore-duplicates,return=representation' }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(r.status + ' ' + await r.text());
-    const created = (await r.json()).length > 0;
+    // 只有真的建出房間的人才是房主，也只有房主能當監控室
+    if ((await r.json()).length > 0) { st.host = true; st.monitor = $('monYes').checked }
     await enterRoom(st.room);
-    if (created) { st.host = true; store.set(st) }
   } catch (e) { alert('建立失敗：' + e.message) }
   $('createRoom').disabled = false;
 };
@@ -279,7 +286,7 @@ async function roomInfo() {
   try {
     const rows = await (await fetch(`${API}?room=eq.${q(room)}&select=role`, { headers: H })).json();
     if (room !== st.room) return;
-    $('roomInfo').textContent = rows.length ? `目前 ${rows.length} 位玩家` : '還沒有人加入，把連結分享給其他玩家';
+    $('roomInfo').textContent = rows.length ? `目前 ${rows.filter(p => p.role !== 'monitor').length} 位玩家` : '還沒有人加入，把連結分享給其他玩家';
   } catch {}
 }
 function roomLink() { return `${location.origin}${location.pathname}?room=${q(st.room)}` }
@@ -307,6 +314,7 @@ async function pick(role) {
 $('asHuman').onclick = () => pick('human');
 $('asGhost').onclick = () => pick('ghost');
 $('asPending').onclick = () => pick('pending');
+$('asMonitor').onclick = () => pick('monitor');
 document.querySelectorAll('[data-back]').forEach(b => b.onclick = () => show(b.dataset.back));
 
 // 3. 教學
@@ -361,7 +369,8 @@ async function poll() {
     st.cfg = (await rr.json())[0] || st.cfg || { caught_to_ghost: true, show_ghosts: false };
     // 活動範圍只畫一次（建立後不會變），第一次順便把地圖對準範圍
     if (st.cfg.area && !gameArea) { gameArea = L.polygon(st.cfg.area, { ...AREA_STYLE, interactive: false }).addTo(map); map.fitBounds(gameArea.getBounds().pad(0.1)) }
-    const rows = players = await pr.json(), seen = new Set(), list = [];
+    const rows = await pr.json(), seen = new Set(), list = [];
+    players = rows.filter(p => p.role !== 'monitor'); // 監控室不參與分配
     const me = rows.find(p => p.name === st.name);
     if (me && me.role !== st.role) {
       const was = st.role; st.role = me.role; store.set(st);
@@ -371,7 +380,9 @@ async function poll() {
     }
     const out = me?.role === 'human' && me.caught;
     // ponytail: 隱藏只在畫面上做，懂 API 的人還是查得到；要防作弊得把讀取權限搬到伺服器端
-    const canSee = p => p.role === 'human' ? !p.caught : p.role === 'ghost' && (st.role === 'ghost' || st.cfg.show_ghosts);
+    const canSee = p => p.role === 'monitor' ? false
+      : p.role === 'human' ? !p.caught
+      : st.role === 'monitor' || (p.role === 'ghost' && (st.role === 'ghost' || st.cfg.show_ghosts));
     for (const p of rows) {
       const mine = p === me, ghost = p.role === 'ghost';
       const visible = canSee(p), located = visible && p.lat != null;
@@ -412,14 +423,14 @@ async function poll() {
     const waiting = st.cfg.auto_assign && !st.cfg.started_at;
     $('hostPanel').hidden = !(st.host && waiting);
     if (st.host && waiting && document.activeElement?.type !== 'number') {
-      const n = rows.length, g = Math.min(+$('nGhost').value || 1, n);
+      const n = players.length, g = Math.min(+$('nGhost').value || 1, n);
       $('nGhost').value = g; $('nHuman').value = Math.max(n - g, 0);
     }
     $('caught').hidden = st.role !== 'human' || out || ended();
     $('help').hidden = out || !needsApp();
     const h = rows.filter(p => p.role === 'human' && !p.caught).length, g = rows.filter(p => p.role === 'ghost').length;
     $('gStatus').textContent = `房號 ${st.room}｜你的身分：${out ? '出局' : ROLE[st.role] || '人'}｜` +
-      (waiting ? `${rows.length} 位玩家等待房主開始` : `剩 ${h} 人、${g} 鬼`) +
+      (waiting ? `${players.length} 位玩家等待房主開始` : `剩 ${h} 人、${g} 鬼`) +
       (needsApp() && !out && me?.lat == null ? '｜還沒收到你的位置，請檢查 App' : '');
     tick();
     map.invalidateSize(); // 面板和列表出現或消失會改變地圖高度
