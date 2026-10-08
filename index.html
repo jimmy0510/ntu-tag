@@ -18,16 +18,24 @@
   p { margin:0 }
   .muted { color:var(--muted); font-size:14px }
   label { display:grid; gap:4px; font-size:14px; color:var(--muted) }
-  input { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
-  #joinCode { text-transform:uppercase; letter-spacing:.2em; font-size:24px; text-align:center }
+  input { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); min-width:0 }
+  #joinCode { font-size:22px; text-align:center }
   .row { display:grid; grid-template-columns:1fr 1fr; gap:8px }
   button { font:inherit; font-weight:600; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff }
   button.ghost { background:var(--ghost); border-color:var(--ghost); color:#fff }
   button.link { background:none; border:0; padding:4px 0; color:var(--muted); font-weight:400; text-decoration:underline; justify-self:start }
   button:focus-visible, input:focus-visible { outline:3px solid var(--accent); outline-offset:2px }
+  button:disabled { opacity:.6; cursor:default }
   .roomTag { font-size:14px; color:var(--muted) }
-  .roomTag b { color:var(--fg); letter-spacing:.15em }
+  .roomTag b { color:var(--fg) }
+  .rules { padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card); font-size:14px; display:grid; gap:2px }
+  .rules:empty { display:none }
+  .opt { display:grid; gap:8px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
+  .opt > span { font-weight:600; color:var(--fg); font-size:15px }
+  .opt label { color:var(--fg); font-size:15px }
+  .opt label:has(input[type=radio]) { display:flex; gap:8px; align-items:center }
+  .opt input[type=radio] { width:18px; height:18px; margin:0 }
   .field { display:grid; gap:4px; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
   .field span { font-size:13px; color:var(--muted) }
   .field div { display:flex; gap:8px; align-items:center }
@@ -36,36 +44,78 @@
   ol { margin:0; padding-left:20px; display:grid; gap:8px }
   a { color:var(--accent) }
   #mapView { position:fixed; inset:0; display:flex; flex-direction:column }
-  #mapBar { display:flex; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
-  #mapBar { flex-wrap:wrap }
-  #mapBar span { flex:1 1 100%; min-width:0 }
+  #mapBar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
+  #gStatus { flex:1 1 100%; min-width:0 }
+  #clock { font-weight:700; font-variant-numeric:tabular-nums }
   #mapBar button { padding:6px 10px }
   #mapBar #caught { margin-left:auto }
+  #hostPanel { display:flex; flex-wrap:wrap; gap:8px; align-items:end; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
+  #hostPanel label { width:72px }
+  #hostPanel input { padding:6px 8px }
+  #hostPanel button { padding:7px 12px }
+  #hostPanel p { flex:1 1 100%; font-size:13px; color:var(--muted) }
+  #players { display:flex; gap:6px; overflow-x:auto; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
+  #players:empty { display:none }
+  .chip { display:flex; align-items:center; gap:6px; flex:none; padding:4px 10px; border-radius:999px; font-weight:400; font-size:13px; white-space:nowrap }
+  .chip.me { border-color:var(--accent) }
+  .chip:disabled { opacity:1 }
+  .chip i { width:10px; height:10px; border-radius:50% }
+  .chip small { color:var(--muted); font-size:12px }
   #map { flex:1 }
   .tag { font-weight:600 }
 </style>
 </head>
 <body>
 
-<!-- 1. 房間 -->
+<!-- 1. 房號 -->
 <main id="s1">
   <h1>台大鬼抓人</h1>
-  <p class="muted">一場遊戲一個房間。由一個人建立房間，把房號告訴其他人，大家再加入同一個房間。</p>
-  <button id="create" class="primary">建立房間</button>
-  <label for="joinCode">或輸入房號加入<input id="joinCode" maxlength="8" autocomplete="off" placeholder="例如 K7QX"></label>
-  <button id="join">加入房間</button>
+  <p class="muted">輸入任何房號都可以：沒人用過就建立新房間並設定規則，已經有這個房間就直接加入。</p>
+  <label for="joinCode">房號<input id="joinCode" maxlength="30" autocomplete="off" placeholder="例如：社窩第一局"></label>
+  <button id="join" class="primary">進入房間</button>
+</main>
+
+<!-- 1b. 建立房間：設定規則 -->
+<main id="sNew" hidden>
+  <p class="roomTag">房號 <b id="rNew"></b></p>
+  <h2>建立新房間</h2>
+  <p class="muted">這是新房間，你是房主，由你決定規則。建立後就不能再改。</p>
+  <div class="opt">
+    <span>人和鬼怎麼決定</span>
+    <label><input type="radio" name="aa" id="aaNo" checked>每個人自己選</label>
+    <label><input type="radio" name="aa" id="aaYes">系統隨機分配（房主在地圖上按「遊戲開始」）</label>
+  </div>
+  <div class="opt">
+    <span>人被抓到之後</span>
+    <label><input type="radio" name="ctg" id="ctgYes" checked>變成鬼，一起抓人</label>
+    <label><input type="radio" name="ctg" id="ctgNo">直接出局</label>
+  </div>
+  <div class="opt">
+    <span>人看不看得到鬼的位置</span>
+    <label><input type="radio" name="sg" id="sgNo" checked>看不到（鬼不用回報位置）</label>
+    <label><input type="radio" name="sg" id="sgYes">看得到（鬼也要裝 App 回報位置）</label>
+  </div>
+  <div class="opt">
+    <span>時間（可以不填）</span>
+    <label for="ghostStart">鬼開始抓人<input type="datetime-local" id="ghostStart"></label>
+    <label for="endAt">遊戲結束<input type="datetime-local" id="endAt"></label>
+  </div>
+  <button id="createRoom" class="primary">建立房間</button>
+  <button class="link" data-back="s1">← 換房號</button>
 </main>
 
 <!-- 2. 名字與身份 -->
 <main id="s2" hidden>
-  <p class="roomTag">房號 <b id="r2"></b>　請把房號告訴其他玩家</p>
+  <p class="roomTag">房號 <b id="r2"></b>　<span id="roomInfo"></span></p>
+  <div class="rules" id="rules2"></div>
+  <button class="share">分享房間連結</button>
   <h2>你的名字</h2>
   <label for="name">暱稱（地圖上會顯示這個名字，不要跟別人重複）<input id="name" maxlength="20" placeholder="例如：小明"></label>
-  <div class="row">
+  <div class="row" id="pickRole">
     <button id="asHuman" class="primary">我是人</button>
     <button id="asGhost" class="ghost">我是鬼</button>
   </div>
-  <p class="muted">人要安裝 App 回報位置；鬼不用回報，直接看地圖。所有人都能在地圖上看到人的位置。</p>
+  <button id="asPending" class="primary" hidden>加入遊戲（身分由系統分配）</button>
   <button class="link" data-back="s1">← 換房間</button>
 </main>
 
@@ -73,7 +123,7 @@
 <main id="s3" hidden>
   <p class="roomTag">房號 <b id="r3"></b></p>
   <h2>設定定位 App</h2>
-  <p class="muted">用 Traccar Client 回報位置，手機鎖屏也會繼續追蹤。</p>
+  <p class="muted" id="s3note">用 Traccar Client 回報位置，手機鎖屏也會繼續追蹤。</p>
   <ol>
     <li>安裝免費的 <b>Traccar Client</b>：<a href="https://apps.apple.com/app/traccar-client/id843156974" target="_blank" rel="noopener">iOS</a>／<a href="https://play.google.com/store/apps/details?id=org.traccar.client" target="_blank" rel="noopener">Android</a></li>
     <li>打開 App 的「設定」，把下面兩個值填進去：
@@ -91,53 +141,131 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><span id="clock" hidden></span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="leave">離開</button></div>
+  <div id="hostPanel" hidden>
+    <p>你是房主。等大家都加入後，輸入人數和鬼數，按「遊戲開始」由系統隨機分配身分。</p>
+    <label for="nHuman">人數<input type="number" id="nHuman" min="0" inputmode="numeric"></label>
+    <label for="nGhost">鬼數<input type="number" id="nGhost" min="1" inputmode="numeric"></label>
+    <button id="startGame" class="primary">遊戲開始</button>
+  </div>
+  <div id="players"></div>
   <div id="map"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-const API = 'https://ielczttxqhgmpefbolvb.supabase.co/rest/v1/tag_players';
+const BASE = 'https://ielczttxqhgmpefbolvb.supabase.co/rest/v1/';
+const API = BASE + 'tag_players', ROOMS = BASE + 'tag_rooms';
 const KEY = 'sb_publishable_7N33sjVdcGN_qMyLYcnZOQ_Em74n49h';
+const H = { apikey: KEY, 'Content-Type': 'application/json' };
 const NTU = [25.0174, 121.5397];
 // App 靜止時不回報（Android 會把心跳拖到數分鐘），所以 10 分鐘沒更新才變灰；標籤的「幾分前」才是準的
-const STALE_S = 600, HIDE_S = 30 * 60, POLL_MS = 5000;
+const STALE_S = 600, POLL_MS = 5000;
 const $ = id => document.getElementById(id);
-const store = { get(k) { try { return JSON.parse(localStorage.getItem('tag')) || {} } catch { return {} } }, set(v) { try { localStorage.setItem('tag', JSON.stringify(v)) } catch {} } };
-let st = store.get(); // { room, name, role, step }
+const store = { get() { try { return JSON.parse(localStorage.getItem('tag')) || {} } catch { return {} } }, set(v) { try { localStorage.setItem('tag', JSON.stringify(v)) } catch {} } };
+let st = store.get(); // { room, cfg, host, name, role, step }
+const q = s => encodeURIComponent(s);
+// 系統分配時還不知道會當人還是鬼，所以大家都先設定 App
+const needsApp = () => st.role !== 'ghost' || st.cfg?.show_ghosts;
+const ROLE = { human: '人', ghost: '鬼', pending: '等待分配' };
 
 function show(step) {
   st.step = step; store.set(st);
-  for (const id of ['s1', 's2', 's3']) $(id).hidden = id !== step;
+  for (const id of ['s1', 'sNew', 's2', 's3']) $(id).hidden = id !== step;
   $('mapView').hidden = step !== 'map';
-  $('r2').textContent = $('r3').textContent = st.room || '';
-  if (step === 's2') $('name').value = st.name || '';
-  if (step === 's3') $('devId').textContent = `${st.room}-${st.name}`;
+  $('rNew').textContent = $('r2').textContent = $('r3').textContent = st.room || '';
+  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = '' }
+  if (step === 's2') {
+    $('name').value = st.name || '';
+    $('pickRole').hidden = !!st.cfg?.auto_assign;
+    $('asPending').hidden = !st.cfg?.auto_assign;
+    roomInfo();
+  }
+  if (step === 's3') {
+    $('devId').textContent = `${st.room}-${st.name}`;
+    $('s3note').textContent = st.role === 'pending' && !st.cfg?.show_ghosts
+      ? '還不知道你會被分到人還是鬼，先設定好。如果被分到鬼，到時候再把追蹤關掉。'
+      : '用 Traccar Client 回報位置，手機鎖屏也會繼續追蹤。';
+  }
   if (step === 'map') startMap();
 }
+const hm = iso => new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+function rulesLines(c) {
+  return [
+    `身分：${c.auto_assign ? '系統隨機分配' : '每個人自己選'}`,
+    `人被抓到後：${c.caught_to_ghost ? '變成鬼' : '出局'}`,
+    `人${c.show_ghosts ? '看得到' : '看不到'}鬼的位置`,
+    c.ghost_start_at && `鬼開始抓人：${hm(c.ghost_start_at)}`,
+    c.end_at && `遊戲結束：${hm(c.end_at)}`,
+  ].filter(Boolean);
+}
 
-// 1. 房間
-$('create').onclick = () => {
-  const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-  st.room = [...crypto.getRandomValues(new Uint8Array(4))].map(b => A[b % A.length]).join('');
-  show('s2');
-};
-$('join').onclick = () => {
-  const code = $('joinCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+// 1. 房號：查房間表，有就加入，沒有就建立
+async function enterRoom(code) {
+  code = code.replace(/-/g, '').trim(); // 「-」是 App 裝置識別碼的分隔符
   if (!code) return $('joinCode').focus();
-  st.room = code; show('s2');
-};
+  try {
+    const [cfg] = await (await fetch(`${ROOMS}?room=eq.${q(code)}`, { headers: H })).json();
+    if (code !== st.room) st = { room: code };
+    if (cfg) { st.cfg = cfg; show('s2') } else show('sNew');
+  } catch (e) { alert('連不上伺服器，請再試一次') }
+}
+$('join').onclick = () => enterRoom($('joinCode').value);
 $('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
+$('createRoom').onclick = async () => {
+  const t = id => $(id).value ? new Date($(id).value).toISOString() : null; // datetime-local 是手機當地時間
+  const body = {
+    room: st.room, auto_assign: $('aaYes').checked, caught_to_ghost: $('ctgYes').checked, show_ghosts: $('sgYes').checked,
+    ghost_start_at: t('ghostStart'), end_at: t('endAt'),
+  };
+  if (body.end_at && Date.parse(body.end_at) <= Date.now()) return alert('遊戲結束時間要在現在之後');
+  if (body.end_at && body.ghost_start_at && body.end_at <= body.ghost_start_at) return alert('遊戲結束時間要在鬼開始抓人之後');
+  $('createRoom').disabled = true;
+  try {
+    // 同時有人建立同一個房號時，先建的規則為準；return=representation 拿到的是自己有沒有建成功
+    const r = await fetch(ROOMS + '?on_conflict=room', { method: 'POST', headers: { ...H, Prefer: 'resolution=ignore-duplicates,return=representation' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    const created = (await r.json()).length > 0;
+    await enterRoom(st.room);
+    if (created) { st.host = true; store.set(st) }
+  } catch (e) { alert('建立失敗：' + e.message) }
+  $('createRoom').disabled = false;
+};
+async function roomInfo() {
+  const room = st.room;
+  $('rules2').replaceChildren(...(st.cfg ? rulesLines(st.cfg) : []).map(t => Object.assign(document.createElement('div'), { textContent: t })));
+  $('roomInfo').textContent = '';
+  try {
+    const rows = await (await fetch(`${API}?room=eq.${q(room)}&select=role`, { headers: H })).json();
+    if (room !== st.room) return;
+    $('roomInfo').textContent = rows.length ? `目前 ${rows.length} 位玩家` : '還沒有人加入，把連結分享給其他玩家';
+  } catch {}
+}
+function roomLink() { return `${location.origin}${location.pathname}?room=${q(st.room)}` }
+document.querySelectorAll('.share').forEach(b => b.onclick = async () => {
+  const url = roomLink(), label = b.textContent;
+  try { await navigator.share({ title: '台大鬼抓人', text: `來玩鬼抓人！房號：${st.room}`, url }); return } catch (e) { if (e.name === 'AbortError') return }
+  try { await navigator.clipboard.writeText(url); b.textContent = '已複製連結'; setTimeout(() => b.textContent = label, 1500) }
+  catch { prompt('複製這個連結傳給大家：', url) }
+});
 
-// 2. 名字與身份
-function pick(role) {
+// 2. 名字與身份：登記到資料庫，列表才看得到鬼。只寫 room/name/role，不會蓋掉 App 回報的位置
+async function pick(role) {
   const name = $('name').value.trim();
   if (!name) return $('name').focus();
+  try {
+    const r = await fetch(API + '?on_conflict=room,name', {
+      method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ room: st.room, name, role })
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+  } catch (e) { return alert('登記失敗，請再試一次：' + e.message) }
   st.name = name; st.role = role;
-  show(role === 'human' ? 's3' : 'map');
+  show(needsApp() ? 's3' : 'map');
 }
 $('asHuman').onclick = () => pick('human');
 $('asGhost').onclick = () => pick('ghost');
+$('asPending').onclick = () => pick('pending');
 document.querySelectorAll('[data-back]').forEach(b => b.onclick = () => show(b.dataset.back));
 
 // 3. 教學
@@ -148,11 +276,10 @@ document.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
 $('toMap').onclick = () => show('map');
 
 // 4. 地圖
-let map, markers = new Map(), meDot, timer, wake;
+let map, markers = new Map(), meDot, timer, clockTimer, wake, players = [];
 async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
 function startMap() {
-  $('help').hidden = $('caught').hidden = st.role !== 'human';
   keepAwake();
   if (!map) {
     map = L.map('map').setView(NTU, 16);
@@ -166,59 +293,146 @@ function startMap() {
   }
   setTimeout(() => map.invalidateSize(), 0);
   clearInterval(timer); poll(); timer = setInterval(poll, POLL_MS);
+  clearInterval(clockTimer); tick(); clockTimer = setInterval(tick, 1000);
 }
 function ago(iso) { return Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)) }
+function agoText(s) { return s < 60 ? s + ' 秒前' : s < 3600 ? Math.round(s / 60) + ' 分前' : Math.round(s / 3600) + ' 小時前' }
+function dur(ms) {
+  const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+const ended = () => !!st.cfg?.end_at && Date.now() >= Date.parse(st.cfg.end_at);
+function tick() {
+  const c = st.cfg || {}, now = Date.now();
+  const gs = c.ghost_start_at && Date.parse(c.ghost_start_at), end = c.end_at && Date.parse(c.end_at);
+  const text = end && now >= end ? '遊戲結束'
+    : gs && now < gs ? `鬼 ${dur(gs - now)} 後出發`
+    : end ? `剩 ${dur(end - now)}` : '';
+  $('clock').textContent = text; $('clock').hidden = !text;
+}
 async function poll() {
   try {
-    const since = new Date(Date.now() - HIDE_S * 1000).toISOString();
-    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&updated_at=gte.${since}&caught=eq.false&select=id,name,lat,lng,acc,updated_at`, { headers: { apikey: KEY } });
-    if (!r.ok) throw new Error(r.status);
-    const rows = await r.json(), seen = new Set();
-    let live = 0;
+    const [rr, pr] = await Promise.all([
+      fetch(`${ROOMS}?room=eq.${q(st.room)}`, { headers: H }),
+      fetch(`${API}?room=eq.${q(st.room)}&select=name,role,caught,lat,lng,acc,updated_at&order=role.desc,caught,name`, { headers: H }),
+    ]);
+    if (!rr.ok || !pr.ok) throw new Error(rr.ok ? pr.status : rr.status);
+    st.cfg = (await rr.json())[0] || st.cfg || { caught_to_ghost: true, show_ghosts: false };
+    const rows = players = await pr.json(), seen = new Set(), list = [];
+    const me = rows.find(p => p.name === st.name);
+    if (me && me.role !== st.role) {
+      const was = st.role; st.role = me.role; store.set(st);
+      if (was === 'pending') alert(me.role === 'ghost'
+        ? `遊戲開始！你是「鬼」。${st.cfg.show_ghosts ? '這局人看得到鬼，Traccar 請繼續開著。' : '可以把 Traccar 的追蹤關掉。'}`
+        : '遊戲開始！你是「人」，快跑！Traccar 請保持開著。');
+    }
+    const out = me?.role === 'human' && me.caught;
+    // ponytail: 隱藏只在畫面上做，懂 API 的人還是查得到；要防作弊得把讀取權限搬到伺服器端
+    const canSee = p => p.role === 'human' ? !p.caught : p.role === 'ghost' && (st.role === 'ghost' || st.cfg.show_ghosts);
     for (const p of rows) {
-      seen.add(p.id);
-      const s = ago(p.updated_at), stale = s > STALE_S, mine = p.name === st.name;
-      if (!stale) live++;
+      const mine = p === me, ghost = p.role === 'ghost';
+      const visible = canSee(p), located = visible && p.lat != null;
+      const s = ago(p.updated_at), stale = s > STALE_S;
+      const color = !located || stale ? '#888' : ghost ? '#6b3fa0' : mine ? '#1f6b47' : '#b3261e';
+      // 上方列表
+      const chip = document.createElement('button');
+      chip.className = 'chip' + (mine ? ' me' : '');
+      chip.innerHTML = '<i></i><b></b><small></small>';
+      chip.querySelector('i').style.background = ghost && !located ? '#6b3fa0' : color;
+      chip.querySelector('b').textContent = p.name + (mine ? '（你）' : '');
+      chip.querySelector('small').textContent =
+        !ghost && p.caught ? '人・出局' :
+        (ghost && p.caught ? '鬼（被抓）' : ROLE[p.role]) + (!visible ? '' : located ? '・' + agoText(s) : '・尚未回報');
+      chip.disabled = !located;
+      if (located) chip.onclick = () => map.setView([p.lat, p.lng], 18);
+      list.push(chip);
+      // 地圖標記
+      if (!located) continue;
+      seen.add(p.name);
       const label = document.createElement('span');
       label.className = 'tag';
-      label.textContent = `${mine ? '你' : p.name}・${s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分前'}`;
-      const color = stale ? '#888' : mine ? '#1f6b47' : '#b3261e';
+      label.textContent = `${ghost ? '鬼・' : ''}${mine ? '你' : p.name}・${agoText(s)}`;
       const style = { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 };
-      let m = markers.get(p.id);
+      let m = markers.get(p.name);
       if (!m) {
         m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color, fillOpacity: .08 }).addTo(map) };
         m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -8] });
-        markers.set(p.id, m);
+        markers.set(p.name, m);
       } else {
         m.dot.setLatLng([p.lat, p.lng]).setStyle(style).setTooltipContent(label);
         m.ring.setLatLng([p.lat, p.lng]).setRadius(p.acc || 0).setStyle({ color });
       }
     }
-    for (const [id, m] of markers) if (!seen.has(id)) { m.dot.remove(); m.ring.remove(); markers.delete(id) }
-    const meIn = rows.some(p => p.name === st.name);
-    $('gStatus').textContent = `房號 ${st.room}｜${st.role === 'ghost' ? '鬼' : '人'}｜在線 ${live}／${rows.length} 人` + (st.role === 'human' && !meIn ? '｜還沒收到你的位置，請檢查 App' : '');
+    for (const [k, m] of markers) if (!seen.has(k)) { m.dot.remove(); m.ring.remove(); markers.delete(k) }
+    $('players').replaceChildren(...list);
+    // 房主開始面板
+    const waiting = st.cfg.auto_assign && !st.cfg.started_at;
+    $('hostPanel').hidden = !(st.host && waiting);
+    if (st.host && waiting && document.activeElement?.type !== 'number') {
+      const n = rows.length, g = Math.min(+$('nGhost').value || 1, n);
+      $('nGhost').value = g; $('nHuman').value = Math.max(n - g, 0);
+    }
+    $('caught').hidden = st.role !== 'human' || out || ended();
+    $('help').hidden = out || !needsApp();
+    const h = rows.filter(p => p.role === 'human' && !p.caught).length, g = rows.filter(p => p.role === 'ghost').length;
+    $('gStatus').textContent = `房號 ${st.room}｜你的身分：${out ? '出局' : ROLE[st.role] || '人'}｜` +
+      (waiting ? `${rows.length} 位玩家等待房主開始` : `剩 ${h} 人、${g} 鬼`) +
+      (needsApp() && !out && me?.lat == null ? '｜還沒收到你的位置，請檢查 App' : '');
+    tick();
+    map.invalidateSize(); // 面板和列表出現或消失會改變地圖高度
   } catch (e) { $('gStatus').textContent = '讀取失敗，會自動重試：' + e.message }
 }
+$('nHuman').oninput = () => { $('nGhost').value = Math.max(players.length - (+$('nHuman').value || 0), 0) };
+$('nGhost').oninput = () => { $('nHuman').value = Math.max(players.length - (+$('nGhost').value || 0), 0) };
+$('startGame').onclick = async () => {
+  const n = players.length, nh = +$('nHuman').value, ng = +$('nGhost').value;
+  if (nh + ng !== n) return alert(`人數加鬼數要等於目前的玩家數（${n} 位）`);
+  if (ng < 1 || nh < 1) return alert('人和鬼至少各要 1 位');
+  if (!confirm(`開始遊戲：隨機分配 ${nh} 人、${ng} 鬼？`)) return;
+  // Fisher–Yates 洗牌，前 ng 個當鬼
+  const names = players.map(p => p.name);
+  for (let i = names.length - 1; i > 0; i--) { const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1); [names[i], names[j]] = [names[j], names[i]] }
+  $('startGame').disabled = true;
+  try {
+    const r = await fetch(API + '?on_conflict=room,name', {
+      method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify(names.map((name, i) => ({ room: st.room, name, role: i < ng ? 'ghost' : 'human' })))
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    const r2 = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ started_at: new Date().toISOString() }) });
+    if (!r2.ok) throw new Error(r2.status + ' ' + await r2.text());
+    await poll();
+  } catch (e) { alert('開始失敗，請再按一次：' + e.message) }
+  $('startGame').disabled = false;
+};
 $('fit').onclick = () => {
   const pts = [...markers.values()].map(m => m.dot.getLatLng());
   if (meDot) pts.push(meDot.getLatLng());
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
 };
 $('caught').onclick = async () => {
-  if (!confirm(`確定「${st.name}」被抓了？你會從地圖上消失並變成鬼。`)) return;
+  const toGhost = st.cfg?.caught_to_ghost ?? true;
+  if (!confirm(`確定「${st.name}」被抓了？${toGhost ? '你會變成鬼。' : '你會出局。'}`)) return;
   try {
-    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&name=eq.${encodeURIComponent(st.name)}`, {
-      method: 'PATCH', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ caught: true })
+    const r = await fetch(`${API}?room=eq.${q(st.room)}&name=eq.${q(st.name)}`, {
+      method: 'PATCH', headers: H, body: JSON.stringify(toGhost ? { role: 'ghost', caught: true } : { caught: true })
     });
     if (!r.ok) throw new Error(r.status);
   } catch (e) { return alert('沒有送出成功，請再按一次：' + e.message) }
-  st.role = 'ghost'; store.set(st); startMap();
-  alert('你現在是鬼了。請打開 Traccar 把追蹤開關關掉，省電也避免露出位置。');
+  if (toGhost) st.role = 'ghost';
+  store.set(st); poll();
+  alert(!toGhost ? '你出局了，可以把 Traccar 的追蹤關掉。'
+    : st.cfg.show_ghosts ? '你現在是鬼了。這局人看得到鬼，Traccar 請繼續開著。'
+    : '你現在是鬼了。請把 Traccar 的追蹤關掉，省電也避免露出位置。');
 };
-$('help').onclick = () => { clearInterval(timer); show('s3') };
-$('leave').onclick = () => { clearInterval(timer); st = {}; store.set(st); show('s1') };
+$('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
+$('leave').onclick = () => { clearInterval(timer); clearInterval(clockTimer); st = {}; store.set(st); show('s1') };
 
-show(['s2', 's3', 'map'].includes(st.step) && st.room ? st.step : 's1');
+// 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
+const linkRoom = new URLSearchParams(location.search).get('room');
+history.replaceState(null, '', location.pathname);
+if (linkRoom && linkRoom.replace(/-/g, '').trim() !== st.room) enterRoom(linkRoom);
+else show(['s2', 's3', 'map'].includes(st.step) && st.room && st.cfg ? st.step : st.room && st.step === 'sNew' ? 'sNew' : 's1');
 </script>
 </body>
 </html>
