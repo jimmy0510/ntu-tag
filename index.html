@@ -37,8 +37,10 @@
   a { color:var(--accent) }
   #mapView { position:fixed; inset:0; display:flex; flex-direction:column }
   #mapBar { display:flex; gap:8px; align-items:center; padding:8px 12px; padding-top:calc(8px + env(safe-area-inset-top,0px)); background:var(--card); border-bottom:1px solid var(--line); font-size:14px }
-  #mapBar span { flex:1; min-width:0 }
+  #mapBar { flex-wrap:wrap }
+  #mapBar span { flex:1 1 100%; min-width:0 }
   #mapBar button { padding:6px 10px }
+  #mapBar #caught { margin-left:auto }
   #map { flex:1 }
   .tag { font-weight:600 }
 </style>
@@ -89,7 +91,7 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="leave">離開</button></div>
   <div id="map"></div>
 </div>
 
@@ -150,7 +152,7 @@ let map, markers = new Map(), meDot, timer, wake;
 async function keepAwake() { try { wake = await navigator.wakeLock.request('screen') } catch {} }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && wake) keepAwake() });
 function startMap() {
-  $('help').hidden = st.role !== 'human';
+  $('help').hidden = $('caught').hidden = st.role !== 'human';
   keepAwake();
   if (!map) {
     map = L.map('map').setView(NTU, 16);
@@ -169,7 +171,7 @@ function ago(iso) { return Math.max(0, Math.round((Date.now() - Date.parse(iso))
 async function poll() {
   try {
     const since = new Date(Date.now() - HIDE_S * 1000).toISOString();
-    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&updated_at=gte.${since}&select=id,name,lat,lng,acc,updated_at`, { headers: { apikey: KEY } });
+    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&updated_at=gte.${since}&caught=eq.false&select=id,name,lat,lng,acc,updated_at`, { headers: { apikey: KEY } });
     if (!r.ok) throw new Error(r.status);
     const rows = await r.json(), seen = new Set();
     let live = 0;
@@ -201,6 +203,17 @@ $('fit').onclick = () => {
   const pts = [...markers.values()].map(m => m.dot.getLatLng());
   if (meDot) pts.push(meDot.getLatLng());
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
+};
+$('caught').onclick = async () => {
+  if (!confirm(`確定「${st.name}」被抓了？你會從地圖上消失並變成鬼。`)) return;
+  try {
+    const r = await fetch(`${API}?room=eq.${encodeURIComponent(st.room)}&name=eq.${encodeURIComponent(st.name)}`, {
+      method: 'PATCH', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ caught: true })
+    });
+    if (!r.ok) throw new Error(r.status);
+  } catch (e) { return alert('沒有送出成功，請再按一次：' + e.message) }
+  st.role = 'ghost'; store.set(st); startMap();
+  alert('你現在是鬼了。請打開 Traccar 把追蹤開關關掉，省電也避免露出位置。');
 };
 $('help').onclick = () => { clearInterval(timer); show('s3') };
 $('leave').onclick = () => { clearInterval(timer); st = {}; store.set(st); show('s1') };
