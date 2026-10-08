@@ -286,7 +286,7 @@ $('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
 // 活動範圍：房主依序點頂點，連成多邊形
 let areaMap, areaLayer, areaPts = [];
 const COLOR = { human: '#2f9e44', ghost: '#e03131', stale: '#888', area: '#f08c00' };
-const AREA_STYLE = { color: COLOR.area, weight: 3, dashArray: '8 6', fillOpacity: .06 };
+const AREA_STYLE = { color: COLOR.area, weight: 3, dashArray: '8 6', fillColor: COLOR.area, fillOpacity: .2 };
 function drawArea() {
   $('areaBox').hidden = !$('arYes').checked;
   $('areaCount').textContent = `已點 ${areaPts.length} 點` + (areaPts.length && areaPts.length < 3 ? '，還要再點' : '');
