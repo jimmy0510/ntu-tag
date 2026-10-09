@@ -41,7 +41,7 @@
   <h1>鬼抓人模擬測試</h1>
   <p class="muted">一次開 1 監控室、4 鬼、4 人（安卓、iOS 交錯）。每支「手機」都是真的遊戲頁，位置走真的 Traccar 接收端。</p>
   <label>房號 <input type="text" id="room"></label>
-  <label><input type="checkbox" id="ctg">被抓變成鬼（不勾＝出局，可以測復活任務）</label>
+  <label><input type="checkbox" id="ctg">被抓變成鬼（不勾＝出局，可以測「復活」獎賞）</label>
   <label><input type="checkbox" id="sg" checked>人看得到鬼（鬼也回報位置）</label>
   <label>遊戲時間 <input type="number" id="endMin" value="20" min="1">分鐘</label>
   <button id="setup" class="primary">建立模擬</button>
@@ -52,8 +52,9 @@
     <h2>情境</h2>
     <button id="catchOne">抓一個人</button>
     <button id="shrink">監控室縮圈（縮成 70%）</button>
-    <button id="launch">監控室發起復活任務</button>
-    <button id="finish">兩個人完成復活任務（含上傳合照）</button>
+    <label>特殊任務 <select id="mSel"></select></label>
+    <button id="launch">監控室發起這個任務</button>
+    <button id="finish">兩個人完成這個任務（含上傳合照）</button>
     <button id="iosGap">iOS 玩家全部進背景 3 分鐘</button>
     <button id="endNow">監控室按「遊戲結束」</button>
     <button id="cleanup">結束並清除模擬資料</button>
@@ -76,6 +77,9 @@ const BOTS = [{ name: '監控室', role: 'monitor', os: 'web' },
   ...[1, 2, 3, 4].map(i => ({ name: `鬼${i}(${i % 2 ? '安卓' : 'iOS'})`, role: 'ghost', os: i % 2 ? 'android' : 'ios' })),
   ...[1, 2, 3, 4].map(i => ({ name: `人${i}(${i % 2 ? 'iOS' : '安卓'})`, role: 'human', os: i % 2 ? 'ios' : 'android' }))];
 let room, ctg, sg, bots = [], area = AREA, running = true, timers = [];
+// 有監控室，所以任務都由監控室發起；「復活」獎賞只在被抓出局時有
+const MISSIONS = () => [...(ctg ? [] : [{ task: 'meetup', reward: 'revive', manual: true }]), { task: 'meetup', reward: 'hide', manual: true }];
+const REWARD_NAME = { revive: '復活一個出局的人', hide: '隱藏定位 3 分鐘' };
 
 async function api(path, { method = 'GET', body, prefer } = {}) {
   const r = await fetch(REST + path, { method, headers: prefer ? { ...H, Prefer: prefer } : H, body: body && JSON.stringify(body) });
@@ -115,7 +119,7 @@ $('setup').onclick = async () => {
     await api('tag_rooms', { method: 'POST', body: {
       room, caught_to_ghost: ctg, show_ghosts: sg, auto_assign: false, area: AREA,
       end_at: new Date(Date.now() + $('endMin').value * 60e3).toISOString(),
-      rules: ctg ? {} : { revive: { manual: true } },
+      rules: { missions: MISSIONS() },
     } });
     const [cfg] = await api(`tag_rooms?room=eq.${q(room)}`);
     const c = { lat: 25.0170, lng: 121.5375 }; // 鬼從傅鐘附近出發
@@ -127,7 +131,8 @@ $('setup').onclick = async () => {
       localStorage.setItem('tag:' + b.name, JSON.stringify({ room, name: b.name, role: b.role, step: 'map', cfg, host: b.role === 'monitor', monitor: b.role === 'monitor' }));
       $('frames').append(phone(b));
     }
-    log(`建立房間 ${room}：被抓${ctg ? '變成鬼' : '出局'}、人${sg ? '看得到' : '看不到'}鬼、${$('endMin').value} 分鐘後結束`, 'note');
+    $('mSel').replaceChildren(...MISSIONS().map((m, i) => new Option(`特殊任務 ${i + 1}：${REWARD_NAME[m.reward]}`, i)));
+    log(`建立房間 ${room}：被抓${ctg ? '變成鬼' : '出局'}、人${sg ? '看得到' : '看不到'}鬼、${$('endMin').value} 分鐘後結束、${MISSIONS().length} 個特殊任務`, 'note');
     $('ctrl').hidden = false;
     bots.forEach((b, i) => setTimeout(() => report(b), i * 300));
     timers.push(setInterval(step, 1000), setInterval(() => bots.forEach(report), REPORT_MS), setInterval(sync, 5000));
@@ -227,30 +232,34 @@ $('shrink').onclick = async () => {
   catch (e) { log('縮圈失敗：' + e.message, 'warn') }
 };
 $('launch').onclick = async () => {
-  if (ctg) return log('這個房間是「被抓變成鬼」，沒有復活任務', 'warn');
+  const i = +$('mSel').value;
   try {
-    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slot`);
-    await api(`tag_rooms?room=eq.${q(room)}`, { method: 'PATCH', body: { mission_slot: (r.mission_slot ?? -1) + 1 } });
-    log(`監控室發起第 ${(r.mission_slot ?? -1) + 2} 輪復活任務`, 'note');
+    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slots`);
+    const next = (r.mission_slots[i] ?? -1) + 1;
+    await api(`tag_rooms?room=eq.${q(room)}`, { method: 'PATCH', body: { mission_slots: { ...r.mission_slots, [i]: next } } });
+    log(`監控室發起特殊任務 ${i + 1} 第 ${next + 1} 輪`, 'note');
   } catch (e) { log('發起失敗：' + e.message, 'warn') }
 };
 $('finish').onclick = async () => {
   try {
-    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slot`);
-    if (r.mission_slot == null) return log('要先按「監控室發起復活任務」', 'warn');
+    const i = +$('mSel').value;
+    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slots`);
+    if (r.mission_slots[i] == null) return log(`要先按「監控室發起這個任務」（特殊任務 ${i + 1}）`, 'warn');
     const pair = bots.filter(b => b.role === 'human' && !b.caught).sort(() => rand() - .5).slice(0, 2);
     if (pair.length < 2) return log('還活著的人不到 2 個，做不了任務', 'warn');
-    const slot = r.mission_slot, paths = [];
+    const slot = r.mission_slots[i], paths = [];
     for (const [i, b] of pair.entries()) {
       const path = `sim/${room}-${slot}-${i}-${Date.now()}.jpg`;
       const up = await fetch(PHOTOS + path, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'image/jpeg' }, body: await fakePhoto(pair) });
       if (!up.ok) throw new Error('上傳合照失敗 ' + up.status + ' ' + await up.text());
       paths.push(path);
     }
-    await api('tag_mission_joins?on_conflict=room,slot,name', { method: 'POST', prefer: 'resolution=merge-duplicates', body: pair.map((b, i) => ({
-      room, slot, name: b.name, code: String(1000 + Math.floor(rand() * 9000)), partner: pair[1 - i].name, photo: paths[i] })) });
-    const revived = await api('rpc/tag_mission_finish', { method: 'POST', body: { p_room: room, p_slot: slot } });
-    log(revived ? `${pair[0].name}、${pair[1].name} 完成任務，${revived} 復活` : `${pair[0].name}、${pair[1].name} 完成任務，但沒有人可以復活（沒人出局，或這輪已經完成過）`, revived ? 'note' : 'warn');
+    await api('tag_mission_joins?on_conflict=room,mission,slot,name', { method: 'POST', prefer: 'resolution=merge-duplicates', body: pair.map((b, k) => ({
+      room, mission: i, slot, name: b.name, code: String(1000 + Math.floor(rand() * 9000)), partner: pair[1 - k].name, photo: paths[k] })) });
+    const res = await api('rpc/tag_mission_finish', { method: 'POST', body: { p_room: room, p_mission: i, p_slot: slot } });
+    log(!res ? `${pair[0].name}、${pair[1].name} 完成特殊任務 ${i + 1}，但沒有發獎賞（沒人出局可以復活）`
+      : res.reward === 'hide' ? `${res.pair.join('、')} 完成特殊任務 ${i + 1}，隱藏定位 3 分鐘`
+      : `${res.pair.join('、')} 完成特殊任務 ${i + 1}，${res.revived} 復活`, res ? 'note' : 'warn');
     sync();
   } catch (e) { log('任務失敗：' + e.message, 'warn') }
 };

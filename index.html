@@ -40,6 +40,14 @@
   .inline { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:15px }
   .inline input { width:4.5em; padding:6px 8px; text-align:center }
   #missionPanel { align-items:center; font-size:14px }
+  #missionPanel .mBlock { flex:1 1 100%; display:flex; flex-wrap:wrap; gap:8px; align-items:center }
+  #missionPanel .mBlock + .mBlock { border-top:1px solid var(--line); padding-top:8px }
+  .mList { display:grid; gap:8px }
+  .mList:empty { display:none }
+  .mItem { display:grid; gap:6px; padding:10px; border:1px dashed var(--line); border-radius:8px }
+  .mItem header { display:flex; justify-content:space-between; align-items:center; font-weight:600 }
+  .mItem header button { padding:4px 10px; font-size:13px; font-weight:400 }
+  .mItem select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
   #missionPanel > div { flex:1 1 100%; display:flex; flex-wrap:wrap; gap:8px; align-items:center }
   #missionPanel b.code { font-size:22px; letter-spacing:.15em; font-variant-numeric:tabular-nums }
   #missionPanel input[type=text] { width:6em; letter-spacing:.15em; text-align:center }
@@ -149,14 +157,9 @@
     <label for="endAt">遊戲結束<input type="datetime-local" id="endAt"></label>
   </div>
   <div class="opt">
-    <span>特殊規則（可以複選）</span>
-    <label><input type="checkbox" id="rRevive">復活任務</label>
-    <p class="muted" id="reviveOff">要先把「人被抓到之後」選成「直接出局」才能選。</p>
-    <div class="sub" id="reviveCfg" hidden>
-      <div class="inline" id="reviveTimer">遊戲開始<input type="number" id="rvAfter" value="10" min="0" inputmode="numeric">分鐘後，每<input type="number" id="rvEvery" value="15" min="1" inputmode="numeric">分鐘觸發一次。</div>
-      <p id="reviveManual" hidden>你是監控室：任務由你在地圖上按「發起復活任務」開始，不用設定時間。</p>
-      <p class="muted">任務觸發後，兩個還沒被抓的人碰面，都按「執行任務」，互相輸入對方畫面上的驗證碼，再各自上傳一張兩人合照，就會從出局的人裡隨機復活一位。每輪只能復活一位。</p>
-    </div>
+    <span>特殊任務（可以加很多個，每個各選一種任務和獎賞）</span>
+    <div id="mList" class="mList"></div>
+    <button type="button" id="mAdd">＋ 新增特殊任務</button>
   </div>
   <button id="createRoom" class="primary">建立房間</button>
   <button class="link" data-back="s1">← 換房號</button>
@@ -256,7 +259,7 @@ function show(step) {
   for (const id of ['s1', 'sNew', 's2', 's3']) $(id).hidden = id !== step;
   $('mapView').hidden = step !== 'map';
   $('rNew').textContent = $('r2').textContent = $('r3').textContent = st.room || '';
-  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = ''; $('arNo').checked = $('monNo').checked = $('ctgYes').checked = true; $('rRevive').checked = false; syncRules(); areaPts = []; drawArea() }
+  if (step === 'sNew') { $('ghostStart').value = $('endAt').value = ''; $('arNo').checked = $('monNo').checked = $('ctgYes').checked = true; $('mList').replaceChildren(); syncRules(); areaPts = []; drawArea() }
   if (step === 's2') {
     $('name').value = st.name || '';
     $('pickRole').hidden = !!st.cfg?.auto_assign || !!st.monitor;
@@ -294,8 +297,7 @@ function rulesLines(c) {
     c.area && `活動範圍：限定（地圖上的橘色框）`,
     c.ghost_start_at && `鬼開始抓人：${hm(c.ghost_start_at)}`,
     c.end_at && `遊戲結束：${hm(c.end_at)}`,
-    c.rules?.revive && (c.rules.revive.manual ? '特殊規則：復活任務（由監控室發起）'
-      : `特殊規則：復活任務（遊戲開始 ${c.rules.revive.after} 分鐘後，每 ${c.rules.revive.every} 分鐘一次）`),
+    ...missionsOf(c).map((m, i) => `${mName(i)}：${TASKS[m.task]?.name} → ${REWARDS[m.reward]?.name}（${m.manual ? '由監控室發起' : `遊戲開始 ${m.after} 分鐘後，每 ${m.every} 分鐘一次`}）`),
   ].filter(Boolean);
 }
 
@@ -341,29 +343,55 @@ $('arNo').onchange = $('arYes').onchange = drawArea;
 $('areaUndo').onclick = () => { areaPts.pop(); drawArea() };
 $('areaClear').onclick = () => { areaPts = []; drawArea() };
 
-// 特殊規則：復活任務只在「被抓直接出局」時能選
-function syncRules() {
-  const ok = $('ctgNo').checked;
-  $('rRevive').disabled = !ok; if (!ok) $('rRevive').checked = false;
-  $('reviveOff').hidden = ok;
-  $('reviveCfg').hidden = !$('rRevive').checked;
-  // 有監控室就由監控室手動發起，沒有才用定時
-  $('reviveTimer').hidden = $('monYes').checked;
-  $('reviveManual').hidden = !$('monYes').checked;
+// 特殊任務清單：每個任務選一種「任務」＋一種「獎賞」；有監控室就由監控室發起，沒有才用定時
+const TASKS = {
+  meetup: { name: '兩人碰面合照', how: '兩個還沒被抓的人碰面，都按地圖上方的「執行任務」，互相輸入對方畫面上的 4 位數驗證碼，再各自上傳一張兩人合照。' },
+};
+const REWARDS = {
+  revive: { name: '復活一個出局的人', effect: '從出局的人裡隨機復活一位' },
+  hide: { name: '隱藏定位 3 分鐘', effect: '完成的兩個人隱藏定位 3 分鐘，鬼和其他人都看不到他們（監控室看得到）' },
+};
+const missionsOf = c => c?.rules?.missions || [];
+function addMissionCard() {
+  const el = document.createElement('div');
+  el.className = 'mItem';
+  el.innerHTML = `<header><span></span><button type="button" class="mDel">刪除</button></header>
+    <label>任務<select class="mTask">${Object.entries(TASKS).map(([k, t]) => `<option value="${k}">${t.name}</option>`).join('')}</select></label>
+    <label>獎賞<select class="mReward">${Object.entries(REWARDS).map(([k, r]) => `<option value="${k}">${r.name}</option>`).join('')}</select></label>
+    <div class="inline mTimer">遊戲開始<input type="number" class="mAfter" value="10" min="0" inputmode="numeric">分鐘後，每<input type="number" class="mEvery" value="15" min="1" inputmode="numeric">分鐘一次</div>
+    <p class="muted mManual">由監控室在地圖上按「發起」</p>`;
+  el.querySelector('.mDel').onclick = () => { el.remove(); syncRules() };
+  $('mList').append(el);
+  syncRules();
 }
-$('ctgYes').onchange = $('ctgNo').onchange = $('rRevive').onchange = $('monYes').onchange = $('monNo').onchange = syncRules;
+$('mAdd').onclick = addMissionCard;
+// 「復活」獎賞只在被抓直接出局時能選；有監控室就不用設定時間
+function syncRules() {
+  const outMode = $('ctgNo').checked, manual = $('monYes').checked;
+  [...$('mList').children].forEach((el, i) => {
+    el.querySelector('header span').textContent = mName(i);
+    const rw = el.querySelector('.mReward'), revive = rw.querySelector('[value=revive]');
+    revive.disabled = !outMode;
+    revive.textContent = REWARDS.revive.name + (outMode ? '' : '（要選「被抓直接出局」才能用）');
+    if (!outMode && rw.value === 'revive') rw.value = 'hide';
+    el.querySelector('.mTimer').hidden = manual;
+    el.querySelector('.mManual').hidden = !manual;
+  });
+}
+$('ctgYes').onchange = $('ctgNo').onchange = $('monYes').onchange = $('monNo').onchange = syncRules;
 
 $('createRoom').onclick = async () => {
   const t = id => $(id).value ? new Date($(id).value).toISOString() : null; // datetime-local 是手機當地時間
-  const rules = {};
-  if ($('rRevive').checked) rules.revive = $('monYes').checked ? { manual: true }
-    : { after: Math.floor(+$('rvAfter').value), every: Math.floor(+$('rvEvery').value) };
+  const manual = $('monYes').checked;
+  const missions = [...$('mList').children].map(el => ({ task: el.querySelector('.mTask').value, reward: el.querySelector('.mReward').value,
+    ...(manual ? { manual: true } : { after: Math.floor(+el.querySelector('.mAfter').value), every: Math.floor(+el.querySelector('.mEvery').value) }) }));
+  const rules = missions.length ? { missions } : {};
   const body = {
     room: st.room, auto_assign: $('aaYes').checked, caught_to_ghost: $('ctgYes').checked, show_ghosts: $('sgYes').checked,
     ghost_start_at: t('ghostStart'), end_at: t('endAt'), area: $('arYes').checked ? areaPts : null, rules,
   };
   if (body.area && body.area.length < 3) return alert('活動範圍至少要點 3 個點');
-  if (rules.revive && !rules.revive.manual && !(rules.revive.after >= 0 && rules.revive.every >= 1)) return alert('復活任務的時間要填：開始後 0 分鐘以上、每 1 分鐘以上');
+  if (missions.some(m => !m.manual && !(m.after >= 0 && m.every >= 1))) return alert('特殊任務的時間要填：開始後 0 分鐘以上、每 1 分鐘以上');
   if (body.end_at && Date.parse(body.end_at) <= Date.now()) return alert('遊戲結束時間要在現在之後');
   if (body.end_at && body.ghost_start_at && body.end_at <= body.ghost_start_at) return alert('遊戲結束時間要在鬼開始抓人之後');
   $('createRoom').disabled = true;
@@ -472,9 +500,13 @@ function tick() {
   if (gs && now < gs) add('鬼出發', gs);
   if (end && now >= end) items.push(['遊戲', '已結束', false]);
   else if (end) add('遊戲剩', end);
-  const mc = missionClock();
-  if (mc && !mc.manual && mc.next) add(mc.slot < 0 ? '復活任務開始' : mission.done && mission.slot === mc.slot ? '下一輪任務' : '本輪任務剩', mc.next);
-  if (mc?.manual && mc.slot >= 0 && !(mission.done && mission.slot === mc.slot)) items.push(['復活任務', '進行中', false]);
+  missionsOf(c).forEach((m, i) => {
+    const mc = missionClock(i); if (!mc) return;
+    const done = missionState[i]?.done && missionState[i].slot === mc.slot;
+    if (!mc.manual && mc.next) add(`任務${i + 1}${mc.slot < 0 ? '開始' : done ? '下一輪' : '剩'}`, mc.next);
+    if (mc.manual && mc.slot >= 0 && !done) items.push([`任務${i + 1}`, '進行中', false]);
+  });
+  if (st.hiddenUntil && Date.parse(st.hiddenUntil) > now) add('你隱藏定位剩', Date.parse(st.hiddenUntil));
   $('timers').replaceChildren(...items.map(([label, value, urgent]) => {
     const d = Object.assign(document.createElement('div'), { className: 'timer' + (urgent ? ' urgent' : '') });
     d.append(Object.assign(document.createElement('span'), { textContent: label }), Object.assign(document.createElement('b'), { textContent: value }));
@@ -487,7 +519,7 @@ async function poll() {
   try {
     const [rr, pr] = await Promise.all([
       fetch(`${ROOMS}?room=eq.${q(st.room)}`, { headers: H }),
-      fetch(`${API}?room=eq.${q(st.room)}&select=name,role,caught,lat,lng,acc,updated_at&order=role.desc,caught,name`, { headers: H }),
+      fetch(`${API}?room=eq.${q(st.room)}&select=name,role,caught,lat,lng,acc,updated_at,hidden_until&order=role.desc,caught,name`, { headers: H }),
     ]);
     if (!rr.ok || !pr.ok) throw new Error(rr.ok ? pr.status : rr.status);
     if (room !== st.room || st.step !== 'map') return; // 等回應的時候已經離開或換房間了
@@ -513,6 +545,7 @@ async function poll() {
         : '遊戲開始！你是「人」，快跑！Traccar 請保持開著。');
     }
     const out = me?.role === 'human' && me.caught;
+    st.hiddenUntil = me?.hidden_until || null;
     // 遊戲結束（監控室按下，或到了設定的時間）：通知所有人並列出還沒被抓的人；打開時已經結束就不通知
     const over = ended();
     if (over && st.endSeen === false) {
@@ -522,7 +555,9 @@ async function poll() {
     }
     st.endSeen = over;
     // ponytail: 隱藏只在畫面上做，懂 API 的人還是查得到；要防作弊得把讀取權限搬到伺服器端
+    const hiddenNow = p => !!p.hidden_until && Date.parse(p.hidden_until) > Date.now();
     const canSee = p => p.role === 'monitor' ? false
+      : p !== me && st.role !== 'monitor' && hiddenNow(p) ? false // 獎賞「隱藏定位」
       : p.role === 'human' ? !p.caught
       : st.role === 'monitor' || (p.role === 'ghost' && (st.role === 'ghost' || st.cfg.show_ghosts));
     for (const p of rows) {
@@ -537,9 +572,9 @@ async function poll() {
       chip.innerHTML = '<i></i><b></b><small></small>';
       chip.querySelector('i').style.background = ghost && !located ? COLOR.ghost : color;
       chip.querySelector('b').textContent = p.name + (mine ? '（你）' : '');
-      chip.querySelector('small').textContent =
-        !ghost && p.caught ? '人・出局' :
-        (ghost && p.caught ? '鬼（被抓）' : ROLE[p.role]) + (!visible ? '' : located ? '・' + agoText(s) : ghost && !st.cfg.show_ghosts ? '' : '・尚未回報');
+      chip.querySelector('small').textContent = (!ghost && p.caught ? '人・出局' :
+        (ghost && p.caught ? '鬼（被抓）' : ROLE[p.role]) + (!visible ? '' : located ? '・' + agoText(s) : ghost && !st.cfg.show_ghosts ? '' : '・尚未回報'))
+        + (hiddenNow(p) ? '・隱藏中' : '');
       chip.disabled = !located;
       if (located) chip.onclick = () => map.setView([p.lat, p.lng], 18);
       list.push(chip);
@@ -548,7 +583,7 @@ async function poll() {
       seen.add(p.name);
       const label = document.createElement('span');
       label.className = 'tag';
-      label.textContent = `${ghost ? '鬼・' : ''}${mine ? '你' : p.name}・${agoText(s)}`;
+      label.textContent = `${ghost ? '鬼・' : ''}${mine ? '你' : p.name}${hiddenNow(p) ? '（隱藏中）' : ''}・${agoText(s)}`;
       const style = { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 };
       let m = markers.get(p.name);
       if (!m) {
@@ -610,123 +645,142 @@ $('startGame').onclick = async () => {
   } catch (e) { alert('開始失敗，請再按一次：' + e.message) }
   $('startGame').disabled = false;
 };
-// ---------- 特殊規則：復活任務 ----------
+// ---------- 特殊任務 ----------
 const JOINS = BASE + 'tag_mission_joins', RESULTS = BASE + 'tag_mission_results';
 const STORAGE = 'https://ielczttxqhgmpefbolvb.supabase.co/storage/v1/object/tag-photos/';
-let mission = { key: '' }; // 這一輪的狀態，給按鈕用
+let missionState = []; // 每個任務這一輪的狀態，給按鈕和倒數列用
+const mName = i => `特殊任務 ${i + 1}`;
 // 遊戲開始時間：房主按開始 → 鬼開始抓人 → 房間建立；第 slot 輪從 first + slot*every 開始
-function missionClock() {
-  const c = st.cfg, r = c?.rules?.revive;
-  if (!r || c.caught_to_ghost || (c.auto_assign && !c.started_at)) return null;
+function missionClock(i) {
+  const c = st.cfg, m = missionsOf(c)[i];
+  if (!m || (m.reward === 'revive' && c.caught_to_ghost) || (c.auto_assign && !c.started_at)) return null;
   const now = Date.now(), end = c.end_at ? Date.parse(c.end_at) : Infinity;
   if (now >= end) return null;
-  if (r.manual) return { slot: c.mission_slot ?? -1, next: null, manual: true }; // 監控室發起：沒有倒數
-  const first = Date.parse(c.started_at || c.ghost_start_at || c.created_at) + r.after * 60e3, every = r.every * 60e3;
+  if (m.manual) return { slot: c.mission_slots?.[i] ?? -1, next: null, manual: true }; // 監控室發起：沒有倒數
+  const first = Date.parse(c.started_at || c.ghost_start_at || c.created_at) + m.after * 60e3, every = m.every * 60e3;
   if (now < first) return { slot: -1, next: first };
   const slot = Math.floor((now - first) / every), next = first + (slot + 1) * every;
   return { slot, next: next < end ? next : null };
 }
 const esc = s => String(s).replace(/[&<>"']/g, ch => '&#' + ch.charCodeAt(0) + ';');
 async function missionPoll(rows, me) {
-  const mc = missionClock();
-  if (!st.cfg?.rules?.revive) { $('missionPanel').hidden = true; return }
-  // 復活通知（所有人）：有新的完成紀錄就通知；第一次打開只記下不通知
-  const results = await (await fetch(`${RESULTS}?room=eq.${q(st.room)}&order=slot`, { headers: H })).json();
-  const maxSlot = Math.max(-1, ...results.map(r => r.slot));
-  if (st.lastResult === undefined) st.lastResult = maxSlot;
-  for (const r of results.filter(r => r.slot > st.lastResult)) {
+  const ms = missionsOf(st.cfg);
+  if (!ms.length) { $('missionPanel').hidden = true; return }
+  const [results, joinsAll] = await Promise.all([
+    fetch(`${RESULTS}?room=eq.${q(st.room)}&order=done_at`, { headers: H }).then(r => r.json()),
+    fetch(`${JOINS}?room=eq.${q(st.room)}&order=created_at`, { headers: H }).then(r => r.json()),
+  ]);
+  // 任務完成通知（所有人）：第一次打開只記下不通知
+  const rkey = r => r.mission + ':' + r.slot;
+  if (st.seenResults) for (const r of results.filter(r => !st.seenResults.includes(rkey(r)))) {
     navigator.vibrate?.([200, 100, 200]);
-    alert(r.revived === st.name ? `你被復活了！${r.pair.join('、')} 完成了復活任務。請打開 Traccar 的追蹤。`
-      : `復活任務完成！${r.pair.join('、')} 完成任務，${r.revived} 復活了。`);
+    const other = r.pair.find(n => n !== st.name);
+    alert(r.reward === 'hide'
+      ? (r.pair.includes(st.name) ? `${mName(r.mission)} 完成！你和 ${other} 隱藏定位 3 分鐘，鬼和其他人都看不到你們。` : `${mName(r.mission)} 完成！${r.pair.join('、')} 隱藏定位 3 分鐘。`)
+      : r.revived === st.name ? `你被復活了！${r.pair.join('、')} 完成了${mName(r.mission)}。請打開 Traccar 的追蹤。`
+      : `${mName(r.mission)} 完成！${r.pair.join('、')} 完成任務，${r.revived} 復活了。`);
   }
-  st.lastResult = maxSlot;
-  // 新一輪任務開始（監控室發起或定時觸發）：通知所有人並說明規則和效果；第一次打開只記下
-  if (mc) {
-    if (st.lastMission !== undefined && mc.slot > st.lastMission && st.role !== 'monitor') {
+  st.seenResults = results.map(rkey);
+  // 新一輪開始（監控室發起或定時觸發）：通知所有人並說明任務和獎賞；第一次打開只記下
+  const clocks = ms.map((m, i) => missionClock(i));
+  st.lastMissions ||= {};
+  clocks.forEach((mc, i) => {
+    if (!mc) return;
+    const last = st.lastMissions[i];
+    if (last !== undefined && mc.slot > last && st.role !== 'monitor') {
       navigator.vibrate?.([200, 100, 200]);
-      alert(`復活任務開始！${mc.manual ? '（監控室發起）' : `（第 ${mc.slot + 1} 輪）`}\n\n` +
-        '任務規則：兩個還沒被抓的人碰面，都按地圖上方的「執行任務」，互相輸入對方畫面上的 4 位數驗證碼，再各自上傳一張兩人合照。\n\n' +
-        '任務效果：完成後，會從出局的人裡隨機復活一位。每輪只能復活一位，先完成的那組算數。' +
+      alert(`${mName(i)} 開始！${mc.manual ? '（監控室發起）' : `（第 ${mc.slot + 1} 輪）`}\n\n` +
+        `任務：${TASKS[ms[i].task].how}\n\n獎賞：${REWARDS[ms[i].reward].effect}。每輪只有一組能完成，先完成的算數。` +
         (mc.next ? `\n\n這一輪到 ${hm(mc.next)} 結束。` : ''));
     }
-    st.lastMission = Math.max(mc.slot, -1);
-  }
+    st.lastMissions[i] = Math.max(mc.slot, -1);
+  });
   // 新合照：通知監控室和鬼；第一次打開只記下，畫廊開著就順便更新
   if (canViewPhotos()) {
-    const shots = await (await fetch(`${JOINS}?room=eq.${q(st.room)}&photo=not.is.null&select=slot,name,partner,photo&order=created_at`, { headers: H })).json();
+    const shots = joinsAll.filter(j => j.photo);
     const fresh = st.seenPhotos ? shots.filter(s => !st.seenPhotos.includes(s.photo)) : [];
     st.seenPhotos = shots.map(s => s.photo);
     if (fresh.length) {
       navigator.vibrate?.([150, 80, 150]);
       if (!$('gallery').hidden) loadGallery();
-      alert('新合照！\n' + fresh.map(s => `${s.name}${s.partner ? `（和 ${s.partner}）` : ''}上傳了第 ${s.slot + 1} 輪的合照`).join('\n') +
+      alert('新合照！\n' + fresh.map(s => `${s.name}${s.partner ? `（和 ${s.partner}）` : ''}上傳了${mName(s.mission)} 第 ${s.slot + 1} 輪的合照`).join('\n') +
         ($('gallery').hidden ? '\n\n按地圖上方的「合照」查看。' : ''));
     }
   }
   store.set(st);
-  if (!mc) { $('missionPanel').hidden = true; return }
 
+  // 任務列：每個進行中的任務一段
   const alive = p => p.role === 'human' && !p.caught;
   const anyOut = rows.some(p => p.role === 'human' && p.caught);
-  const done = results.find(r => r.slot === mc.slot);
-  let joins = [];
-  if (mc.slot >= 0 && !done && me && alive(me)) joins = await (await fetch(`${JOINS}?room=eq.${q(st.room)}&slot=eq.${mc.slot}`, { headers: H })).json();
-  const mine = joins.find(j => j.name === st.name), partner = mine?.partner && joins.find(j => j.name === mine.partner);
-  const mutual = partner?.partner === st.name;
-  // 兩張照片都到了就請伺服器復活（重複呼叫也只會復活一次）
-  if (mutual && mine.photo && partner.photo) { await fetch(BASE + 'rpc/tag_mission_finish', { method: 'POST', headers: H, body: JSON.stringify({ p_room: st.room, p_slot: mc.slot }) }); return }
-
-  let state, html;
-  const launch = st.role === 'monitor' && mc.manual && (mc.slot < 0 || done)
-    ? `<button class="primary" data-m="launch"${anyOut ? '' : ' disabled'}>發起復活任務</button>${anyOut ? '' : '<span class="muted">目前沒有人出局</span>'}` : '';
-  if (mc.slot < 0) { state = 'wait' + anyOut; html = mc.manual ? `<div>復活任務：${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : `<div>復活任務：第一輪開始時間看上方倒數</div>` }
-  else if (done) { state = 'done' + done.revived + anyOut; html = `<div>本輪復活任務已完成（${esc(done.revived)} 復活）</div>${launch}` }
-  else if (!me || !alive(me)) { state = 'watch'; html = `<div>復活任務進行中！還沒被抓的人可以兩兩碰面完成任務</div>` }
-  else if (!anyOut) { state = 'none'; html = `<div>復活任務進行中，但目前沒有人出局</div>` }
-  else if (!mine) { state = 'idle'; html = `<div>復活任務進行中！找另一個還沒被抓的人碰面，兩個人都按「執行任務」</div><button class="primary" data-m="join">執行任務</button>` }
-  else if (!partner) { state = 'code' + mine.code; html = `<div>你的驗證碼 <b class="code">${mine.code}</b>　請對方輸入</div><div><label for="mCode" style="width:auto">輸入對方的驗證碼</label><input type="text" id="mCode" inputmode="numeric" maxlength="4" autocomplete="off"><button class="primary" data-m="pair">確認</button><button data-m="join">重來</button></div>` }
-  else if (!mutual) { state = 'half' + mine.code + partner.name; html = `<div>已輸入 ${esc(partner.name)} 的驗證碼，等 ${esc(partner.name)} 輸入你的驗證碼 <b class="code">${mine.code}</b>…</div><button data-m="join">重來</button>` }
-  else if (!mine.photo) { state = 'photo' + partner.name; html = `<div>配對成功！和 ${esc(partner.name)} 拍一張合照，兩個人都要各自上傳。</div><div><input type="file" id="mPhoto" accept="image/*"><button class="primary" data-m="upload">上傳</button></div>` }
-  else { state = 'sent' + partner.name; html = `<div>照片已上傳，等 ${esc(partner.name)} 上傳…</div>` }
-  state = mc.slot + ':' + state; // 換輪一定重畫（倒數目標會變）
-  mission = { slot: mc.slot, key: state, alive: rows.filter(alive).map(p => p.name), done: !!done };
+  const blocks = []; let key = '';
+  missionState = [];
+  for (const [i, m] of ms.entries()) {
+    const mc = clocks[i]; if (!mc) continue;
+    const done = results.find(r => r.mission === i && r.slot === mc.slot);
+    const joins = joinsAll.filter(j => j.mission === i && j.slot === mc.slot);
+    const mine = joins.find(j => j.name === st.name), partner = mine?.partner && joins.find(j => j.name === mine.partner);
+    const mutual = partner?.partner === st.name;
+    // 兩張照片都到了就請伺服器發獎賞（重複呼叫也只會發一次），下一次更新會看到結果
+    if (!done && mutual && mine.photo && partner.photo)
+      fetch(BASE + 'rpc/tag_mission_finish', { method: 'POST', headers: H, body: JSON.stringify({ p_room: st.room, p_mission: i, p_slot: mc.slot }) });
+    const noTarget = m.reward === 'revive' && !anyOut; // 復活任務要有人出局才有意義
+    const d = `data-i="${i}"`;
+    const launch = st.role === 'monitor' && mc.manual && (mc.slot < 0 || done)
+      ? `<button class="primary" data-m="launch" ${d}${noTarget ? ' disabled' : ''}>發起${mName(i)}</button>${noTarget ? '<span class="muted">目前沒有人出局</span>' : ''}` : '';
+    let state, html;
+    if (mc.slot < 0) { state = 'wait' + noTarget; html = mc.manual ? `<div>${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : '<div>開始時間看上方倒數</div>' }
+    else if (done) { state = 'done' + noTarget; html = `<div>本輪已完成（${done.reward === 'hide' ? esc(done.pair.join('、')) + ' 隱藏定位 3 分鐘' : esc(done.revived) + ' 復活'}）</div>${launch}` }
+    else if (!me || !alive(me)) { state = 'watch'; html = '<div>進行中！還沒被抓的人可以兩兩碰面完成任務</div>' }
+    else if (noTarget) { state = 'none'; html = '<div>進行中，但目前沒有人出局，完成也不能復活</div>' }
+    else if (!mine) { state = 'idle'; html = `<div>進行中！找另一個還沒被抓的人碰面，兩個人都按「執行任務」</div><button class="primary" data-m="join" ${d}>執行任務</button>` }
+    else if (!partner) { state = 'code' + mine.code; html = `<div>你的驗證碼 <b class="code">${mine.code}</b>　請對方輸入</div><div><label for="mCode${i}" style="width:auto">輸入對方的驗證碼</label><input type="text" id="mCode${i}" inputmode="numeric" maxlength="4" autocomplete="off"><button class="primary" data-m="pair" ${d}>確認</button><button data-m="join" ${d}>重來</button></div>` }
+    else if (!mutual) { state = 'half' + mine.code + partner.name; html = `<div>已輸入 ${esc(partner.name)} 的驗證碼，等 ${esc(partner.name)} 輸入你的驗證碼 <b class="code">${mine.code}</b>…</div><button data-m="join" ${d}>重來</button>` }
+    else if (!mine.photo) { state = 'photo' + partner.name; html = `<div>配對成功！和 ${esc(partner.name)} 拍一張合照，兩個人都要各自上傳。</div><div><input type="file" id="mPhoto${i}" accept="image/*"><button class="primary" data-m="upload" ${d}>上傳</button></div>` }
+    else { state = 'sent' + partner.name; html = `<div>照片已上傳，等 ${esc(partner.name)} 上傳…</div>` }
+    blocks.push(`<div class="mBlock"><div><b>${mName(i)}</b>：${TASKS[m.task].name} → ${REWARDS[m.reward].name}</div>${html}</div>`);
+    key += `${i}:${mc.slot}:${state}|`; // 換輪一定重畫
+    missionState[i] = { slot: mc.slot, done: !!done, alive: rows.filter(alive).map(p => p.name) };
+  }
+  if (!blocks.length) { $('missionPanel').hidden = true; return }
   // 狀態沒變就不重畫，避免打字打到一半被清掉
-  if ($('missionPanel').dataset.key !== state) { $('missionPanel').dataset.key = state; $('missionPanel').innerHTML = html }
+  if ($('missionPanel').dataset.key !== key) { $('missionPanel').dataset.key = key; $('missionPanel').innerHTML = blocks.join('') }
   $('missionPanel').hidden = false;
 }
 $('missionPanel').onclick = async e => {
   const act = e.target.dataset?.m; if (!act) return;
-  if (act === 'launch' && !confirm('發起一輪復活任務？所有人都會收到通知。')) return;
+  const i = +e.target.dataset.i, ms = missionState[i];
+  if (act === 'launch' && !confirm(`發起${mName(i)}？所有人都會收到通知。`)) return;
+  const mine = `${JOINS}?room=eq.${q(st.room)}&mission=eq.${i}&slot=eq.${ms.slot}&name=eq.${q(st.name)}`;
   e.target.disabled = true;
   try {
     if (act === 'launch') {
-      const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ mission_slot: mission.slot + 1 }) });
+      const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ mission_slots: { ...st.cfg.mission_slots, [i]: ms.slot + 1 } }) });
       if (!r.ok) throw new Error(r.status + ' ' + await r.text());
     }
     if (act === 'join') { // 開始或重來：新的驗證碼、清掉配對和照片
       const code = String(crypto.getRandomValues(new Uint16Array(1))[0] % 10000).padStart(4, '0');
-      const r = await fetch(JOINS + '?on_conflict=room,slot,name', { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' },
-        body: JSON.stringify({ room: st.room, slot: mission.slot, name: st.name, code, partner: null, photo: null }) });
+      const r = await fetch(JOINS + '?on_conflict=room,mission,slot,name', { method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({ room: st.room, mission: i, slot: ms.slot, name: st.name, code, partner: null, photo: null }) });
       if (!r.ok) throw new Error(r.status + ' ' + await r.text());
     }
     if (act === 'pair') {
-      const code = $('mCode').value.trim();
+      const code = $('mCode' + i).value.trim();
       if (!/^\d{4}$/.test(code)) throw new Error('驗證碼是 4 位數字');
-      const found = await (await fetch(`${JOINS}?room=eq.${q(st.room)}&slot=eq.${mission.slot}&code=eq.${code}&name=neq.${q(st.name)}`, { headers: H })).json();
+      const found = await (await fetch(`${JOINS}?room=eq.${q(st.room)}&mission=eq.${i}&slot=eq.${ms.slot}&code=eq.${code}&name=neq.${q(st.name)}`, { headers: H })).json();
       // ponytail: 4 位數同一輪撞號機率很低，撞到就取第一個；要更嚴謹再加長或由伺服器發碼
-      const p = found.find(j => mission.alive.includes(j.name));
-      if (!p) throw new Error('找不到這個驗證碼。請確認對方也按了「執行任務」，而且還沒被抓。');
-      const r = await fetch(`${JOINS}?room=eq.${q(st.room)}&slot=eq.${mission.slot}&name=eq.${q(st.name)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ partner: p.name }) });
+      const p = found.find(j => ms.alive.includes(j.name));
+      if (!p) throw new Error('找不到這個驗證碼。請確認對方也按了同一個任務的「執行任務」，而且還沒被抓。');
+      const r = await fetch(mine, { method: 'PATCH', headers: H, body: JSON.stringify({ partner: p.name }) });
       if (!r.ok) throw new Error(r.status + ' ' + await r.text());
     }
     if (act === 'upload') {
-      const f = $('mPhoto').files[0];
+      const f = $('mPhoto' + i).files[0];
       if (!f) throw new Error('請先選一張合照');
       const blob = await shrink(f);
       const path = `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0].toString(16)}.jpg`;
       const up = await fetch(STORAGE + path, { method: 'POST', headers: { apikey: KEY, 'Content-Type': blob.type || 'image/jpeg' }, body: blob });
       if (!up.ok) throw new Error('照片上傳失敗：' + up.status + ' ' + await up.text());
-      const r = await fetch(`${JOINS}?room=eq.${q(st.room)}&slot=eq.${mission.slot}&name=eq.${q(st.name)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ photo: path }) });
+      const r = await fetch(mine, { method: 'PATCH', headers: H, body: JSON.stringify({ photo: path }) });
       if (!r.ok) throw new Error(r.status + ' ' + await r.text());
     }
     await poll();
@@ -745,7 +799,7 @@ async function shrink(file) {
 }
 
 // 任務合照：監控室和鬼可以看
-const canViewPhotos = () => !!st.cfg?.rules?.revive && (st.role === 'monitor' || st.role === 'ghost');
+const canViewPhotos = () => missionsOf(st.cfg).length > 0 && (st.role === 'monitor' || st.role === 'ghost');
 const photoUrls = new Map(); // 照片要帶金鑰才能讀，抓成 blob 網址後快取
 async function photoUrl(path) {
   if (!photoUrls.has(path)) {
@@ -760,16 +814,17 @@ async function loadGallery() {
   list.textContent = '載入中…';
   try {
     const [joins, results] = await Promise.all([
-      fetch(`${JOINS}?room=eq.${q(st.room)}&photo=not.is.null&order=slot.desc,created_at`, { headers: H }).then(r => r.json()),
+      fetch(`${JOINS}?room=eq.${q(st.room)}&photo=not.is.null&order=mission,slot.desc,created_at`, { headers: H }).then(r => r.json()),
       fetch(`${RESULTS}?room=eq.${q(st.room)}`, { headers: H }).then(r => r.json()),
     ]);
     if (!joins.length) { list.textContent = '還沒有人上傳合照。'; return }
     const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e };
     const rounds = [];
-    for (const slot of [...new Set(joins.map(j => j.slot))]) {
-      const res = results.find(r => r.slot === slot);
+    for (const key of [...new Set(joins.map(j => j.mission + ':' + j.slot))]) {
+      const [mission, slot] = key.split(':').map(Number);
+      const res = results.find(r => r.mission === mission && r.slot === slot);
       const grid = el('div', { className: 'gPhotos' });
-      for (const j of joins.filter(j => j.slot === slot)) {
+      for (const j of joins.filter(j => j.mission === mission && j.slot === slot)) {
         const img = el('img', { alt: `${j.name} 上傳的合照` });
         const a = el('a', { target: '_blank', rel: 'noopener' }, img);
         photoUrl(j.photo).then(u => { img.src = a.href = u }, () => { a.textContent = '照片讀取失敗' });
@@ -777,7 +832,7 @@ async function loadGallery() {
         grid.append(el('figure', {}, a, el('figcaption', { textContent: `${j.name}${j.partner ? `（和 ${j.partner}）` : ''}・${t}` })));
       }
       rounds.push(el('section', { className: 'gRound' },
-        el('h3', { textContent: `第 ${slot + 1} 輪` }, el('small', { textContent: res ? `完成：${res.pair.join('、')}，${res.revived} 復活` : '還沒完成' })),
+        el('h3', { textContent: `${mName(mission)} 第 ${slot + 1} 輪` }, el('small', { textContent: res ? `完成：${res.pair.join('、')}，${res.reward === 'hide' ? '隱藏定位 3 分鐘' : res.revived + ' 復活'}` : '還沒完成' })),
         grid));
     }
     list.replaceChildren(...rounds);
