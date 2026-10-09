@@ -200,7 +200,7 @@
 
 <!-- 4. 地圖 -->
 <div id="mapView" hidden>
-  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="photosBtn" hidden>合照</button><button id="leave">離開</button></div>
+  <div id="mapBar"><span id="gStatus">載入中…</span><button id="fit">全部</button><button id="help" hidden>設定</button><button class="share">分享</button><button id="caught" class="ghost" hidden>我被抓了</button><button id="editArea" hidden>修改範圍</button><button id="photosBtn" hidden>合照</button><button id="endGame" class="ghost" hidden>遊戲結束</button><button id="leave">離開</button></div>
   <div id="timers" hidden></div>
   <div id="editPanel" class="panel" hidden>
     <p>在地圖上依序點出新範圍的每個角（至少 3 點）。灰色點線是目前的範圍。</p>
@@ -513,6 +513,14 @@ async function poll() {
         : '遊戲開始！你是「人」，快跑！Traccar 請保持開著。');
     }
     const out = me?.role === 'human' && me.caught;
+    // 遊戲結束（監控室按下，或到了設定的時間）：通知所有人並列出還沒被抓的人；打開時已經結束就不通知
+    const over = ended();
+    if (over && st.endSeen === false) {
+      const left = rows.filter(p => p.role === 'human' && !p.caught).map(p => p.name);
+      navigator.vibrate?.([400, 150, 400]);
+      alert('遊戲結束！\n\n' + (left.length ? `人獲勝！還沒被抓的人（${left.length} 位）：${left.join('、')}` : '所有人都被抓到了，鬼獲勝！'));
+    }
+    st.endSeen = over;
     // ponytail: 隱藏只在畫面上做，懂 API 的人還是查得到；要防作弊得把讀取權限搬到伺服器端
     const canSee = p => p.role === 'monitor' ? false
       : p.role === 'human' ? !p.caught
@@ -567,7 +575,8 @@ async function poll() {
       $('nGhost').value = g; $('nHuman').value = Math.max(n - g, 0);
     }
     $('caught').hidden = st.role !== 'human' || out || ended();
-    $('editArea').hidden = st.role !== 'monitor' || !!editPts;
+    $('editArea').hidden = st.role !== 'monitor' || !!editPts || over;
+    $('endGame').hidden = st.role !== 'monitor' || over;
     $('photosBtn').hidden = !canViewPhotos();
     $('help').hidden = out || !needsApp();
     const h = rows.filter(p => p.role === 'human' && !p.caught).length, g = rows.filter(p => p.role === 'ghost').length;
@@ -774,6 +783,16 @@ async function loadGallery() {
     list.replaceChildren(...rounds);
   } catch (e) { list.textContent = '讀取失敗，請按重新整理：' + e.message }
 }
+$('endGame').onclick = async () => {
+  if (!confirm('確定要現在結束遊戲？所有人都會收到「遊戲結束」通知，結束後不能再抓人或做任務。')) return;
+  $('endGame').disabled = true;
+  try {
+    const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ end_at: new Date().toISOString() }) });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    await poll();
+  } catch (e) { alert('結束失敗，請再按一次：' + e.message) }
+  $('endGame').disabled = false;
+};
 $('photosBtn').onclick = () => { $('gallery').hidden = false; loadGallery() };
 $('gRefresh').onclick = loadGallery;
 $('gClose').onclick = () => { $('gallery').hidden = true };

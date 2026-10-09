@@ -55,6 +55,7 @@
     <button id="launch">監控室發起復活任務</button>
     <button id="finish">兩個人完成復活任務（含上傳合照）</button>
     <button id="iosGap">iOS 玩家全部進背景 3 分鐘</button>
+    <button id="endNow">監控室按「遊戲結束」</button>
     <button id="cleanup">結束並清除模擬資料</button>
   </div>
   <h2>紀錄</h2>
@@ -263,6 +264,12 @@ function fakePhoto(pair) {
 $('iosGap').onclick = () => {
   for (const b of bots.filter(b => b.os === 'ios' && reports(b))) b.gapUntil = Date.now() + 180e3;
   log('iOS 玩家全部進背景 3 分鐘（地圖上應該看到他們的「幾秒前」一直變大）', 'note');
+};
+// 直接按監控室那支手機畫面上的按鈕，測的是真的按鈕
+$('endNow').onclick = () => {
+  const btn = bots.find(b => b.role === 'monitor')?.el.querySelector('iframe').contentDocument.getElementById('endGame');
+  if (!btn || btn.hidden) return log('監控室畫面上沒有「遊戲結束」按鈕（可能已經結束了）', 'warn');
+  btn.click(); log('監控室按下「遊戲結束」', 'note');
 };
 $('cleanup').onclick = async () => {
   timers.forEach(clearInterval); timers = []; running = false;
