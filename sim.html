@@ -53,8 +53,13 @@
     <button id="catchOne">抓一個人</button>
     <button id="shrink">監控室縮圈（縮成 70%）</button>
     <label>特殊任務 <select id="mSel"></select></label>
-    <button id="launch">監控室發起這個任務</button>
+    <button id="launch">監控室發起這個任務（打卡任務每輪換到隨機地點）</button>
     <button id="finish">完成這個任務（合照任務：兩人上傳合照；打卡任務：一個人跑去打卡）</button>
+    <h2>監控室新增任務</h2>
+    <label>任務 <select id="nmT"><option value="meetup">兩人碰面合照</option><option value="checkin">到指定地點打卡</option></select></label>
+    <label>獎賞 <select id="nmR"><option value="hide">隱藏定位 3 分鐘</option><option value="revive">復活一個出局的人</option></select></label>
+    <button id="newMission">監控室新增並發起（打卡任務會隨機選點）</button>
+    <h2>其他</h2>
     <button id="iosGap">iOS 玩家全部進背景 3 分鐘</button>
     <button id="endNow">監控室按「遊戲結束」</button>
     <button id="cleanup">結束並清除模擬資料</button>
@@ -81,6 +86,27 @@ let room, ctg, sg, bots = [], area = AREA, running = true, timers = [];
 const SPOT = [25.0186, 121.5410]; // 打卡點：小椰林道東邊
 const MISSIONS = () => [{ task: 'meetup', reward: ctg ? 'hide' : 'revive', manual: true }, { task: 'checkin', reward: 'hide', manual: true, spot: SPOT }];
 const REWARD_NAME = { revive: '復活一個出局的人', hide: '隱藏定位 3 分鐘' }, TASK_NAME = { meetup: '兩人碰面合照', checkin: '到指定地點打卡' };
+let missions = []; // 房間目前的特殊任務（跟資料庫同步，監控室中途新增也會出現在下拉選單）
+function setMissions(list = []) {
+  if (JSON.stringify(list) === JSON.stringify(missions)) return;
+  const keep = $('mSel').value; missions = list;
+  $('mSel').replaceChildren(...list.map((m, i) => new Option(`特殊任務 ${i + 1}：${TASK_NAME[m.task]} → ${REWARD_NAME[m.reward]}`, i)));
+  if (keep !== '' && +keep < list.length) $('mSel').value = keep;
+}
+// 監控室那支手機的畫面：情境盡量按真的按鈕
+const monitor = () => { const f = bots.find(b => b.role === 'monitor').el.querySelector('iframe'); return { d: f.contentDocument, w: f.contentWindow } };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+function randomSpot() { // 目前活動範圍裡隨機一點（往內縮一點，避免在邊上）
+  const la = area.map(p => p[0]), ln = area.map(p => p[1]), lo = Math.min(...la), hi = Math.max(...la), wl = Math.min(...ln), wh = Math.max(...ln);
+  return [+(lo + (hi - lo) * (.15 + rand() * .7)).toFixed(6), +(wl + (wh - wl) * (.15 + rand() * .7)).toFixed(6)];
+}
+async function pickSpotAndGo() { // 監控室在地圖上點打卡點，再按「用這個點發起」
+  const { d, w } = monitor(), spot = randomSpot();
+  await wait(300);
+  w.eval('map').fire('click', { latlng: w.L.latLng(spot[0], spot[1]) });
+  d.getElementById('spotGo').click();
+  return spot;
+}
 
 async function api(path, { method = 'GET', body, prefer } = {}) {
   const r = await fetch(REST + path, { method, headers: prefer ? { ...H, Prefer: prefer } : H, body: body && JSON.stringify(body) });
@@ -132,7 +158,7 @@ $('setup').onclick = async () => {
       localStorage.setItem('tag:' + b.name, JSON.stringify({ room, name: b.name, role: b.role, step: 'map', cfg, host: b.role === 'monitor', monitor: b.role === 'monitor' }));
       $('frames').append(phone(b));
     }
-    $('mSel').replaceChildren(...MISSIONS().map((m, i) => new Option(`特殊任務 ${i + 1}：${TASK_NAME[m.task]} → ${REWARD_NAME[m.reward]}`, i)));
+    missions = []; setMissions(cfg.rules.missions);
     log(`建立房間 ${room}：被抓${ctg ? '變成鬼' : '出局'}、人${sg ? '看得到' : '看不到'}鬼、${$('endMin').value} 分鐘後結束、${MISSIONS().length} 個特殊任務`, 'note');
     $('ctrl').hidden = false;
     bots.forEach((b, i) => setTimeout(() => report(b), i * 300));
@@ -216,8 +242,9 @@ async function sync() {
       if (b.role === 'human' && b.caught && !out) log(`${b.name} 被復活了，恢復回報`, 'note');
       b.role = r.role; b.caught = out;
     }
-    const [cfg] = await api(`tag_rooms?room=eq.${q(room)}&select=area`);
+    const [cfg] = await api(`tag_rooms?room=eq.${q(room)}&select=area,rules`);
     if (cfg?.area) area = cfg.area;
+    setMissions(cfg?.rules?.missions);
   } catch (e) { log('同步失敗：' + e.message, 'warn') }
 }
 
@@ -235,20 +262,36 @@ $('shrink').onclick = async () => {
   catch (e) { log('縮圈失敗：' + e.message, 'warn') }
 };
 $('launch').onclick = async () => {
-  const i = +$('mSel').value;
-  try {
-    const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slots`);
-    const next = (r.mission_slots[i] ?? -1) + 1;
-    await api(`tag_rooms?room=eq.${q(room)}`, { method: 'PATCH', body: { mission_slots: { ...r.mission_slots, [i]: next } } });
-    log(`監控室發起特殊任務 ${i + 1} 第 ${next + 1} 輪`, 'note');
-  } catch (e) { log('發起失敗：' + e.message, 'warn') }
+  const i = +$('mSel').value, { d, w } = monitor();
+  await w.eval('poll()'); // 監控室畫面每 5 秒才更新，先更新一次再看按鈕
+  const btn = d.querySelector(`#missionPanel [data-m="launch"][data-i="${i}"]`);
+  if (!btn) return log(`監控室畫面上沒有「發起特殊任務 ${i + 1}」：這一輪還沒完成，或遊戲已經結束`, 'warn');
+  if (btn.disabled) return log(`特殊任務 ${i + 1} 是復活獎賞，目前沒有人出局，監控室不能發起`, 'warn');
+  btn.click();
+  if (missions[i].task === 'checkin') { const s = await pickSpotAndGo(); log(`監控室發起特殊任務 ${i + 1}，打卡點換到 ${s.join(', ')}`, 'note') }
+  else log(`監控室發起特殊任務 ${i + 1}`, 'note');
+};
+// 監控室中途新增任務：按監控室畫面上的「＋ 新增特殊任務並發起」，選任務、獎賞
+$('newMission').onclick = async () => {
+  const task = $('nmT').value, reward = $('nmR').value, { d, w } = monitor();
+  await w.eval('poll()');
+  if (reward === 'revive' && ctg) return log('這個房間是「被抓變成鬼」，不能選復活獎賞', 'warn');
+  const btn = d.querySelector('#missionPanel [data-m="new"]');
+  if (!btn) return log('監控室畫面上沒有「新增特殊任務」按鈕（遊戲可能已經結束）', 'warn');
+  btn.click(); await wait(200);
+  d.getElementById('nmTask').value = task; d.getElementById('nmReward').value = reward;
+  d.getElementById('nmGo').click();
+  const n = missions.length + 1;
+  if (task === 'checkin') { const s = await pickSpotAndGo(); log(`監控室新增特殊任務 ${n}：${TASK_NAME[task]} → ${REWARD_NAME[reward]}，打卡點 ${s.join(', ')}`, 'note') }
+  else log(`監控室新增特殊任務 ${n}：${TASK_NAME[task]} → ${REWARD_NAME[reward]}`, 'note');
+  await wait(1500); sync();
 };
 $('finish').onclick = async () => {
   try {
     const i = +$('mSel').value;
     const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slots`);
     if (r.mission_slots[i] == null) return log(`要先按「監控室發起這個任務」（特殊任務 ${i + 1}）`, 'warn');
-    if (MISSIONS()[i].task === 'checkin') return checkin(i, r.mission_slots[i]);
+    if (missions[i].task === 'checkin') return checkin(i, r.mission_slots[i]);
     const pair = bots.filter(b => b.role === 'human' && !b.caught).sort(() => rand() - .5).slice(0, 2);
     if (pair.length < 2) return log('還活著的人不到 2 個，做不了任務', 'warn');
     const slot = r.mission_slots[i], paths = [];
