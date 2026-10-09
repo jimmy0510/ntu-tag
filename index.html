@@ -91,6 +91,8 @@
   .panel button { padding:7px 12px }
   .panel p { flex:1 1 100%; font-size:13px; color:var(--muted) }
   #editPanel { align-items:center }
+  #newMission label { width:auto; flex:1 1 140px }
+  #newMission select { width:100%; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
   #editCount { flex:1 1 100%; font-size:14px; font-weight:600 }
   #players { display:flex; gap:6px; overflow-x:auto; padding:8px 12px; background:var(--card); border-bottom:1px solid var(--line) }
   #players:empty { display:none }
@@ -106,6 +108,9 @@
   .areaTools span { flex:1 }
   .areaTools button { padding:6px 10px; font-size:13px }
   .tag { font-weight:600 }
+  .leaflet-tooltip.nameTag { background:none; border:0; box-shadow:none; padding:0; color:#16181a; font-size:12px; font-weight:700;
+    text-shadow:0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff }
+  .leaflet-tooltip.nameTag::before { display:none }
 </style>
 </head>
 <body>
@@ -217,6 +222,12 @@
     <p id="spotHint"></p>
     <button id="spotCancel">取消</button><button id="spotGo" class="primary">用這個點發起</button>
   </div>
+  <div id="newMission" class="panel" hidden>
+    <p>新增一個特殊任務，選好按「發起」就會馬上開始，所有人都會收到通知。</p>
+    <label for="nmTask">任務<select id="nmTask"></select></label>
+    <label for="nmReward">獎賞<select id="nmReward"></select></label>
+    <button id="nmCancel">取消</button><button id="nmGo" class="primary">發起</button>
+  </div>
   <div id="hostPanel" class="panel" hidden>
     <p>你是房主。等大家都加入後，輸入人數和鬼數，按「遊戲開始」由系統隨機分配身分。</p>
     <label for="nHuman">人數<input type="number" id="nHuman" min="0" inputmode="numeric"></label>
@@ -303,7 +314,7 @@ function rulesLines(c) {
     c.area && `活動範圍：限定（地圖上的橘色框）`,
     c.ghost_start_at && `鬼開始抓人：${hm(c.ghost_start_at)}`,
     c.end_at && `遊戲結束：${hm(c.end_at)}`,
-    ...missionsOf(c).map((m, i) => `${mName(i)}：${TASKS[m.task]?.name} → ${REWARDS[m.reward]?.name}（${m.manual ? '由監控室發起' : `遊戲開始 ${m.after} 分鐘後，每 ${m.every} 分鐘一次`}）`),
+    missionsOf(c).length && `特殊任務：${missionsOf(c).length} 個（內容在任務開始時才公布）`,
   ].filter(Boolean);
 }
 
@@ -613,13 +624,13 @@ async function poll() {
       seen.add(p.name);
       const label = document.createElement('span');
       label.className = 'tag';
-      label.textContent = `${ghost ? '鬼・' : ''}${mine ? '你' : p.name}${hiddenNow(p) ? '（隱藏中）' : ''}・${agoText(s)}`;
+      label.textContent = `${ghost ? '鬼・' : ''}${mine ? '你' : p.name}${hiddenNow(p) ? '（隱藏中）' : ''}${s > 30 ? '・' + agoText(s) : ''}`;
       const style = { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 };
       let m = markers.get(p.name);
       if (!m) {
         m = { dot: L.circleMarker([p.lat, p.lng], style).addTo(map), ring: L.circle([p.lat, p.lng], { radius: p.acc || 0, weight: 1, color, fillOpacity: .08 }).addTo(map) };
         if (mine) m.self = L.circleMarker([p.lat, p.lng], { radius: 16, color, weight: 2.5, dashArray: '4 4', fill: false, interactive: false }).addTo(map);
-        m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -8] });
+        m.dot.bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -6], className: 'nameTag' });
         markers.set(p.name, m);
       } else {
         m.dot.setLatLng([p.lat, p.lng]).setStyle(style).setTooltipContent(label);
@@ -697,7 +708,7 @@ function missionClock(i) {
 const esc = s => String(s).replace(/[&<>"']/g, ch => '&#' + ch.charCodeAt(0) + ';');
 async function missionPoll(rows, me) {
   const ms = missionsOf(st.cfg);
-  if (!ms.length) { $('missionPanel').hidden = true; return }
+  if (!ms.length && st.role !== 'monitor') { $('missionPanel').hidden = true; return }
   const [results, joinsAll] = await Promise.all([
     fetch(`${RESULTS}?room=eq.${q(st.room)}&order=done_at`, { headers: H }).then(r => r.json()),
     fetch(`${JOINS}?room=eq.${q(st.room)}&order=created_at`, { headers: H }).then(r => r.json()),
@@ -715,10 +726,11 @@ async function missionPoll(rows, me) {
   st.seenResults = results.map(rkey);
   // 新一輪開始（監控室發起或定時觸發）：通知所有人並說明任務和獎賞；第一次打開只記下
   const clocks = ms.map((m, i) => missionClock(i));
+  const firstOpen = !st.lastMissions;
   st.lastMissions ||= {};
   clocks.forEach((mc, i) => {
     if (!mc) return;
-    const last = st.lastMissions[i];
+    const last = st.lastMissions[i] ?? (firstOpen ? undefined : -1);
     if (last !== undefined && mc.slot > last && st.role !== 'monitor') {
       navigator.vibrate?.([200, 100, 200]);
       alert(`${mName(i)} 開始！${mc.manual ? '（監控室發起）' : `（第 ${mc.slot + 1} 輪）`}\n\n` +
@@ -759,6 +771,9 @@ async function missionPoll(rows, me) {
     const d = `data-i="${i}"`;
     const launch = st.role === 'monitor' && mc.manual && (mc.slot < 0 || done)
       ? `<button class="primary" data-m="launch" ${d}${noTarget ? ' disabled' : ''}>發起${mName(i)}</button>${noTarget ? '<span class="muted">目前沒有人出局</span>' : ''}` : '';
+    const secret = st.role !== 'monitor' && mc.slot < 0;
+    missionState[i] = { slot: mc.slot, done: !!done, alive: rows.filter(alive).map(p => p.name) };
+    if (secret && mc.manual) continue; // 監控室還沒發起：玩家完全看不到
     let state, html;
     if (mc.slot < 0) { state = 'wait' + noTarget; html = mc.manual ? `<div>${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : '<div>開始時間看上方倒數</div>' }
     else if (done) { state = 'done' + noTarget; html = `<div>本輪已完成（${esc(done.pair.join('、'))} 完成，${done.reward === 'hide' ? '隱藏定位 3 分鐘' : esc(done.revived) + ' 復活'}）</div>${launch}` }
@@ -783,22 +798,31 @@ async function missionPoll(rows, me) {
       $('missionPanel').insertBefore(blk, [...$('missionPanel').children].find(c => +c.dataset.i > i) || null);
     }
     const key = `${mc.slot}:${state}`; // 換輪一定重畫；狀態沒變就不重畫，避免打字打到一半被清掉
-    if (blk.dataset.key !== key) { blk.dataset.key = key; blk.innerHTML = `<div><b>${mName(i)}</b>：${TASKS[m.task].name} → ${REWARDS[m.reward].name}</div>${html}` }
-    missionState[i] = { slot: mc.slot, done: !!done, alive: rows.filter(alive).map(p => p.name) };
+    // 還沒開始的任務，玩家只知道「有一個任務」，監控室看得到內容
+    const title = secret ? '內容開始時公布' : `${TASKS[m.task].name} → ${REWARDS[m.reward].name}`;
+    if (blk.dataset.key !== key) { blk.dataset.key = key; blk.innerHTML = `<div><b>${mName(i)}</b>：${title}</div>${html}` }
     // 打卡點：這一輪進行中才畫在地圖上（所有人都看得到）
     if (m.task === 'checkin' && spotOf(i) && mc.slot >= 0 && !done) {
       activeSpots.add(i);
       spotLayers[i] ||= L.circle(spotOf(i), { radius: SPOT_M, ...SPOT_STYLE, interactive: false }).addTo(map)
-        .bindTooltip(`打卡點・${mName(i)}`, { permanent: true, direction: 'center', className: 'tag' });
+        .bindTooltip(`打卡點・${mName(i)}`, { permanent: true, direction: 'center', className: 'nameTag' });
       spotLayers[i].setLatLng(spotOf(i)); // 監控室換了點就跟著移
     }
   }
   for (const k of Object.keys(spotLayers)) if (!activeSpots.has(+k)) { spotLayers[k].remove(); delete spotLayers[k] }
+  // 監控室：隨時可以新增一個任務並馬上發起（遊戲結束就不行）
+  if (st.role === 'monitor' && !ended() && !(st.cfg.auto_assign && !st.cfg.started_at)) {
+    shown.add(9999);
+    if (!$('missionPanel').querySelector('.mBlock[data-i="9999"]'))
+      $('missionPanel').append(Object.assign(document.createElement('div'), { className: 'mBlock', innerHTML: '<button data-m="new">＋ 新增特殊任務並發起</button>' }));
+    $('missionPanel').lastElementChild.dataset.i = 9999;
+  }
   [...$('missionPanel').children].forEach(c => { if (!shown.has(+c.dataset.i)) c.remove() });
   $('missionPanel').hidden = !shown.size;
 }
 $('missionPanel').onclick = async e => {
   const act = e.target.dataset?.m; if (!act) return;
+  if (act === 'new') return openNewMission();
   const i = +e.target.dataset.i, ms = missionState[i];
   if (act === 'launch' && missionsOf(st.cfg)[i].task === 'checkin') return startSpotPick(i, ms.slot);
   if (act === 'launch' && !confirm(`發起${mName(i)}？所有人都會收到通知。`)) return;
@@ -912,25 +936,49 @@ $('gClose').onclick = () => { $('gallery').hidden = true };
 
 // 監控室發起打卡任務：先在地圖上選這一輪的打卡點（預設是目前的點，不換就直接發起）
 let spotPick = null;
-function startSpotPick(i, slot) {
+function startSpotPick(i, slot, create) {
   endSpotPick();
-  const cur = spotOf(i);
-  spotPick = { i, slot, spot: cur, layer: L.circle(cur, { radius: SPOT_M, ...SPOT_STYLE, dashArray: '6 6', interactive: false }).addTo(map) };
-  $('spotHint').textContent = `點地圖選${mName(i)} 這一輪的打卡點，紫色虛線圈是現在的位置；不想換就直接按「用這個點發起」。`;
+  const c = map.getCenter(), cur = create ? [+c.lat.toFixed(6), +c.lng.toFixed(6)] : spotOf(i);
+  spotPick = { i, slot, spot: cur, create, layer: L.circle(cur, { radius: SPOT_M, ...SPOT_STYLE, dashArray: '6 6', interactive: false }).addTo(map) };
+  $('spotHint').textContent = create ? `點地圖選新任務（${mName(i)}）的打卡點，再按「用這個點發起」。`
+    : `點地圖選${mName(i)} 這一輪的打卡點，紫色虛線圈是現在的位置；不想換就直接按「用這個點發起」。`;
   $('spotPanel').hidden = false; map.invalidateSize(); map.panTo(cur);
 }
 function endSpotPick() { spotPick?.layer.remove(); spotPick = null; $('spotPanel').hidden = true; map?.invalidateSize() }
 $('spotCancel').onclick = endSpotPick;
+// 發起一輪（新增的任務一起寫進規則）：一次 PATCH 寫完，所有人下一次更新就收到
+async function launchMission(i, slot, spot, create) {
+  const body = { mission_slots: { ...st.cfg.mission_slots, [i]: slot + 1 } };
+  if (spot) body.mission_spots = { ...st.cfg.mission_spots, [i]: spot };
+  if (create) body.rules = { ...st.cfg.rules, missions: [...missionsOf(st.cfg), create] };
+  const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+  await poll();
+}
 $('spotGo').onclick = async () => {
-  const { i, slot, spot } = spotPick;
+  const { i, slot, spot, create } = spotPick;
   $('spotGo').disabled = true;
-  try {
-    const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H,
-      body: JSON.stringify({ mission_slots: { ...st.cfg.mission_slots, [i]: slot + 1 }, mission_spots: { ...st.cfg.mission_spots, [i]: spot } }) });
-    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
-    endSpotPick(); await poll();
-  } catch (e) { alert('發起失敗，請再按一次：' + e.message) }
+  try { await launchMission(i, slot, spot, create); endSpotPick() }
+  catch (e) { alert('發起失敗，請再按一次：' + e.message) }
   $('spotGo').disabled = false;
+};
+function openNewMission() {
+  $('nmTask').replaceChildren(...Object.entries(TASKS).map(([k, t]) => new Option(t.name, k)));
+  const outMode = !st.cfg.caught_to_ghost;
+  $('nmReward').replaceChildren(...Object.entries(REWARDS).map(([k, r]) => {
+    const o = new Option(r.name + (k === 'revive' && !outMode ? '（被抓變成鬼的房間不能用）' : ''), k);
+    o.disabled = k === 'revive' && !outMode; return o;
+  }));
+  $('nmReward').value = outMode ? 'revive' : 'hide';
+  $('newMission').hidden = false; map.invalidateSize();
+}
+$('nmCancel').onclick = () => { $('newMission').hidden = true; map.invalidateSize() };
+$('nmGo').onclick = async () => {
+  const create = { task: $('nmTask').value, reward: $('nmReward').value, manual: true }, n = missionsOf(st.cfg).length;
+  $('newMission').hidden = true; map.invalidateSize();
+  if (create.task === 'checkin') return startSpotPick(n, -1, create); // 打卡任務先選打卡點
+  if (!confirm(`發起新的${mName(n)}：${TASKS[create.task].name} → ${REWARDS[create.reward].name}？所有人都會收到通知。`)) return;
+  try { await launchMission(n, -1, null, create) } catch (e) { alert('發起失敗，請再按一次：' + e.message) }
 };
 
 // 監控室縮圈：在主地圖上重新點範圍
@@ -983,7 +1031,7 @@ $('caught').onclick = async () => {
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
 $('leave').onclick = () => {
   if (!confirm(`確定要離開房間「${st.room}」？\n\n之後輸入同一個房號和名字「${st.name}」就能用原本的身分回來。`)) return;
-  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; Object.values(spotLayers).forEach(l => l.remove()); spotLayers = {}; endSpotPick(); drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
+  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; Object.values(spotLayers).forEach(l => l.remove()); spotLayers = {}; endSpotPick(); $('newMission').hidden = true; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');
