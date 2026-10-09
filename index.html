@@ -213,6 +213,10 @@
     <button id="editUndo">復原一點</button><button id="editClear">全部清除</button><button id="editCancel">取消</button>
     <button id="editSave" class="primary">儲存並通知縮圈</button>
   </div>
+  <div id="spotPanel" class="panel" hidden>
+    <p id="spotHint"></p>
+    <button id="spotCancel">取消</button><button id="spotGo" class="primary">用這個點發起</button>
+  </div>
   <div id="hostPanel" class="panel" hidden>
     <p>你是房主。等大家都加入後，輸入人數和鬼數，按「遊戲開始」由系統隨機分配身分。</p>
     <label for="nHuman">人數<input type="number" id="nHuman" min="0" inputmode="numeric"></label>
@@ -396,6 +400,7 @@ function syncRules() {
     if (!outMode && rw.value === 'revive') rw.value = 'hide';
     el.querySelector('.mTimer').hidden = manual;
     el.querySelector('.mManual').hidden = !manual;
+    el.querySelector('.mSpot p').textContent = manual ? '點小地圖選第一輪的打卡地點（之後每一輪監控室發起時都可以換）' : '點小地圖選打卡地點（到這個點 30 公尺內才能打卡）';
   });
 }
 $('ctgYes').onchange = $('ctgNo').onchange = $('monYes').onchange = $('monNo').onchange = syncRules;
@@ -495,7 +500,10 @@ function startMap() {
     map = L.map('map').setView(NTU, 16);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
     editLayer = L.layerGroup().addTo(map);
-    map.on('click', e => { if (editPts) { editPts.push(ptOf(e)); renderEdit() } });
+    map.on('click', e => {
+      if (editPts) { editPts.push(ptOf(e)); renderEdit() }
+      else if (spotPick) { spotPick.spot = ptOf(e); spotPick.layer.setLatLng(spotPick.spot) }
+    });
     // 自己目前的位置（只顯示在自己的地圖上，不上傳）
     navigator.geolocation?.watchPosition(p => {
       const ll = [p.coords.latitude, p.coords.longitude];
@@ -528,7 +536,7 @@ function tick() {
     if (!mc.manual && mc.next) add(`任務${i + 1}${mc.slot < 0 ? '開始' : done ? '下一輪' : '剩'}`, mc.next);
     if (mc.manual && mc.slot >= 0 && !done) items.push([`任務${i + 1}`, '進行中', false]);
   });
-  if (st.hiddenUntil && Date.parse(st.hiddenUntil) > now) add('你隱藏定位剩', Date.parse(st.hiddenUntil));
+  if (st.hiddenUntil && Date.parse(st.hiddenUntil) > now && !(end && now >= end)) add('你隱藏定位剩', Date.parse(st.hiddenUntil)); // 遊戲結束就不用倒數
   $('timers').replaceChildren(...items.map(([label, value, urgent]) => {
     const d = Object.assign(document.createElement('div'), { className: 'timer' + (urgent ? ' urgent' : '') });
     d.append(Object.assign(document.createElement('span'), { textContent: label }), Object.assign(document.createElement('b'), { textContent: value }));
@@ -673,6 +681,7 @@ const STORAGE = 'https://ielczttxqhgmpefbolvb.supabase.co/storage/v1/object/tag-
 let missionState = [], spotLayers = {}; // 每個任務這一輪的狀態（給按鈕和倒數列用）、地圖上的打卡點
 const meters = (a, b) => 6371000 * 2 * Math.asin(Math.sqrt(Math.sin((b[0] - a[0]) * Math.PI / 360) ** 2 + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin((b[1] - a[1]) * Math.PI / 360) ** 2));
 const mName = i => `特殊任務 ${i + 1}`;
+const spotOf = i => st.cfg?.mission_spots?.[i] || missionsOf(st.cfg)[i]?.spot;
 // 遊戲開始時間：房主按開始 → 鬼開始抓人 → 房間建立；第 slot 輪從 first + slot*every 開始
 function missionClock(i) {
   const c = st.cfg, m = missionsOf(c)[i];
@@ -757,7 +766,7 @@ async function missionPoll(rows, me) {
     else if (noTarget) { state = 'none'; html = '<div>進行中，但目前沒有人出局，完成也不能復活</div>' }
     else if (m.task === 'checkin') {
       // 用伺服器上自己最新回報的位置算距離，跟伺服器判斷打卡用的是同一份資料
-      const dm = me.lat == null ? null : Math.round(meters([me.lat, me.lng], m.spot));
+      const dm = me.lat == null ? null : Math.round(meters([me.lat, me.lng], spotOf(i)));
       if (dm == null) { state = 'noloc'; html = '<div>還沒收到你的位置，打開 Traccar 的追蹤才能打卡</div>' }
       else if (dm <= SPOT_M) { state = 'near'; html = `<div>你在打卡點範圍內！</div><button class="primary" data-m="checkin" ${d}>打卡</button>` }
       else { state = 'far' + Math.round(dm / 10); html = `<div>打卡點是地圖上的紫色圈，距離約 ${dm} 公尺（${SPOT_M} 公尺內才能打卡）</div>` }
@@ -777,10 +786,11 @@ async function missionPoll(rows, me) {
     if (blk.dataset.key !== key) { blk.dataset.key = key; blk.innerHTML = `<div><b>${mName(i)}</b>：${TASKS[m.task].name} → ${REWARDS[m.reward].name}</div>${html}` }
     missionState[i] = { slot: mc.slot, done: !!done, alive: rows.filter(alive).map(p => p.name) };
     // 打卡點：這一輪進行中才畫在地圖上（所有人都看得到）
-    if (m.task === 'checkin' && m.spot && mc.slot >= 0 && !done) {
+    if (m.task === 'checkin' && spotOf(i) && mc.slot >= 0 && !done) {
       activeSpots.add(i);
-      spotLayers[i] ||= L.circle(m.spot, { radius: SPOT_M, ...SPOT_STYLE, interactive: false }).addTo(map)
+      spotLayers[i] ||= L.circle(spotOf(i), { radius: SPOT_M, ...SPOT_STYLE, interactive: false }).addTo(map)
         .bindTooltip(`打卡點・${mName(i)}`, { permanent: true, direction: 'center', className: 'tag' });
+      spotLayers[i].setLatLng(spotOf(i)); // 監控室換了點就跟著移
     }
   }
   for (const k of Object.keys(spotLayers)) if (!activeSpots.has(+k)) { spotLayers[k].remove(); delete spotLayers[k] }
@@ -790,6 +800,7 @@ async function missionPoll(rows, me) {
 $('missionPanel').onclick = async e => {
   const act = e.target.dataset?.m; if (!act) return;
   const i = +e.target.dataset.i, ms = missionState[i];
+  if (act === 'launch' && missionsOf(st.cfg)[i].task === 'checkin') return startSpotPick(i, ms.slot);
   if (act === 'launch' && !confirm(`發起${mName(i)}？所有人都會收到通知。`)) return;
   const mine = `${JOINS}?room=eq.${q(st.room)}&mission=eq.${i}&slot=eq.${ms.slot}&name=eq.${q(st.name)}`;
   e.target.disabled = true;
@@ -899,6 +910,29 @@ $('photosBtn').onclick = () => { $('gallery').hidden = false; loadGallery() };
 $('gRefresh').onclick = loadGallery;
 $('gClose').onclick = () => { $('gallery').hidden = true };
 
+// 監控室發起打卡任務：先在地圖上選這一輪的打卡點（預設是目前的點，不換就直接發起）
+let spotPick = null;
+function startSpotPick(i, slot) {
+  endSpotPick();
+  const cur = spotOf(i);
+  spotPick = { i, slot, spot: cur, layer: L.circle(cur, { radius: SPOT_M, ...SPOT_STYLE, dashArray: '6 6', interactive: false }).addTo(map) };
+  $('spotHint').textContent = `點地圖選${mName(i)} 這一輪的打卡點，紫色虛線圈是現在的位置；不想換就直接按「用這個點發起」。`;
+  $('spotPanel').hidden = false; map.invalidateSize(); map.panTo(cur);
+}
+function endSpotPick() { spotPick?.layer.remove(); spotPick = null; $('spotPanel').hidden = true; map?.invalidateSize() }
+$('spotCancel').onclick = endSpotPick;
+$('spotGo').onclick = async () => {
+  const { i, slot, spot } = spotPick;
+  $('spotGo').disabled = true;
+  try {
+    const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H,
+      body: JSON.stringify({ mission_slots: { ...st.cfg.mission_slots, [i]: slot + 1 }, mission_spots: { ...st.cfg.mission_spots, [i]: spot } }) });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    endSpotPick(); await poll();
+  } catch (e) { alert('發起失敗，請再按一次：' + e.message) }
+  $('spotGo').disabled = false;
+};
+
 // 監控室縮圈：在主地圖上重新點範圍
 function renderEdit() {
   $('editPanel').hidden = !editPts;
@@ -949,7 +983,7 @@ $('caught').onclick = async () => {
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
 $('leave').onclick = () => {
   if (!confirm(`確定要離開房間「${st.room}」？\n\n之後輸入同一個房號和名字「${st.name}」就能用原本的身分回來。`)) return;
-  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; Object.values(spotLayers).forEach(l => l.remove()); spotLayers = {}; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
+  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; Object.values(spotLayers).forEach(l => l.remove()); spotLayers = {}; endSpotPick(); drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');

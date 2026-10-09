@@ -175,12 +175,13 @@ function step() {
   bots.forEach(showState);
 }
 async function catchHuman(h, by) {
-  h.caught = true; // 先標記，避免同一秒被抓兩次
+  h.caught = true; h.changedAt = Date.now(); // 先標記，避免同一秒被抓兩次
   try {
     await api(`tag_players?room=eq.${q(room)}&name=eq.${q(h.name)}`, { method: 'PATCH', body: ctg ? { role: 'ghost', caught: true } : { caught: true } });
     if (ctg) { h.role = 'ghost'; h.caught = false }
     log(`${by} 抓到 ${h.name}（${ctg ? '變成鬼' : '出局'}）`, 'note');
   } catch (e) { h.caught = false; log(`抓 ${h.name} 失敗：${e.message}`, 'warn') }
+  h.changedAt = Date.now();
 }
 
 // ---------- 模擬 Traccar 回報 ----------
@@ -206,10 +207,11 @@ async function report(b) {
 
 // 跟資料庫同步：有人在手機畫面按了「我被抓了」、或被復活
 async function sync() {
+  const t0 = Date.now(); // 這次查到的資料比本地最後一次改動舊，就不要拿來蓋
   try {
     const rows = await api(`tag_players?room=eq.${q(room)}&select=name,role,caught`);
     for (const r of rows) {
-      const b = bots.find(x => x.name === r.name); if (!b) continue;
+      const b = bots.find(x => x.name === r.name); if (!b || b.changedAt > t0) continue;
       const out = r.role === 'human' && r.caught;
       if (b.role === 'human' && b.caught && !out) log(`${b.name} 被復活了，恢復回報`, 'note');
       b.role = r.role; b.caught = out;
@@ -267,10 +269,12 @@ $('finish').onclick = async () => {
 };
 // 打卡：挑一個還活著的人，移到打卡點旁邊、馬上回報位置，再按打卡（伺服器用剛回報的位置判斷）
 async function checkin(i, slot) {
+  const [r0] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_spots`);
+  const SPOT_NOW = r0.mission_spots[i] || SPOT;
   const alive = bots.filter(b => b.role === 'human' && !b.caught);
   if (!alive.length) return log('沒有還活著的人可以打卡', 'warn');
   const b = alive[Math.floor(rand() * alive.length)];
-  b.lat = SPOT[0] + (rand() - .5) * .0002; b.lng = SPOT[1] + (rand() - .5) * .0002; b.gapUntil = 0;
+  b.lat = SPOT_NOW[0] + (rand() - .5) * .0002; b.lng = SPOT_NOW[1] + (rand() - .5) * .0002; b.gapUntil = 0;
   await report(b);
   const r = await fetch(REST + 'rpc/tag_mission_checkin', { method: 'POST', headers: H, body: JSON.stringify({ p_room: room, p_mission: i, p_slot: slot, p_name: b.name }) });
   const res = await r.json();
