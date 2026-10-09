@@ -12,7 +12,7 @@
   [hidden] { display:none !important }
   html,body { height:100%; margin:0 }
   body { background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,"Noto Sans TC","PingFang TC",sans-serif }
-  main { max-width:480px; margin:0 auto; padding:24px 16px; display:grid; gap:16px }
+  main { max-width:480px; margin:0 auto; padding:24px 16px; display:grid; grid-template-columns:minmax(0, 1fr); gap:16px }
   h1 { margin:0; font-size:28px }
   h2 { margin:0; font-size:22px }
   p { margin:0 }
@@ -47,7 +47,9 @@
   .mItem { display:grid; gap:6px; padding:10px; border:1px dashed var(--line); border-radius:8px }
   .mItem header { display:flex; justify-content:space-between; align-items:center; font-weight:600 }
   .mItem header button { padding:4px 10px; font-size:13px; font-weight:400 }
-  .mItem select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
+  .mSpot { display:grid; gap:4px }
+  .mSpotMap { height:220px; border-radius:8px; border:1px solid var(--line) }
+  .mItem select { width:100%; min-width:0; font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg) }
   #missionPanel > div { flex:1 1 100%; display:flex; flex-wrap:wrap; gap:8px; align-items:center }
   #missionPanel b.code { font-size:22px; letter-spacing:.15em; font-variant-numeric:tabular-nums }
   #missionPanel input[type=text] { width:6em; letter-spacing:.15em; text-align:center }
@@ -315,7 +317,9 @@ $('join').onclick = () => enterRoom($('joinCode').value);
 $('joinCode').onkeydown = e => { if (e.key === 'Enter') $('join').click() };
 // 活動範圍：房主依序點頂點，連成多邊形
 let areaMap, areaLayer, areaPts = [];
-const COLOR = { human: '#2f9e44', ghost: '#e03131', stale: '#888', area: '#f08c00' };
+const COLOR = { human: '#2f9e44', ghost: '#e03131', stale: '#888', area: '#f08c00', spot: '#7048e8' };
+const SPOT_M = 30; // 打卡點半徑（公尺），伺服器 tag_mission_checkin 也是 30
+const SPOT_STYLE = { color: COLOR.spot, weight: 3, fillColor: COLOR.spot, fillOpacity: .25 };
 const AREA_STYLE = { color: COLOR.area, weight: 3, dashArray: '8 6', fillColor: COLOR.area, fillOpacity: .2 };
 function drawArea() {
   $('areaBox').hidden = !$('arYes').checked;
@@ -346,6 +350,7 @@ $('areaClear').onclick = () => { areaPts = []; drawArea() };
 // 特殊任務清單：每個任務選一種「任務」＋一種「獎賞」；有監控室就由監控室發起，沒有才用定時
 const TASKS = {
   meetup: { name: '兩人碰面合照', how: '兩個還沒被抓的人碰面，都按地圖上方的「執行任務」，互相輸入對方畫面上的 4 位數驗證碼，再各自上傳一張兩人合照。' },
+  checkin: { name: '到指定地點打卡', how: '還沒被抓的人跑到地圖上的紫色打卡點（30 公尺內），按任務列的「打卡」。每輪只有第一個打卡的人算數，鬼也看得到打卡點。' },
 };
 const REWARDS = {
   revive: { name: '復活一個出局的人', effect: '從出局的人裡隨機復活一位' },
@@ -358,13 +363,28 @@ function addMissionCard() {
   el.innerHTML = `<header><span></span><button type="button" class="mDel">刪除</button></header>
     <label>任務<select class="mTask">${Object.entries(TASKS).map(([k, t]) => `<option value="${k}">${t.name}</option>`).join('')}</select></label>
     <label>獎賞<select class="mReward">${Object.entries(REWARDS).map(([k, r]) => `<option value="${k}">${r.name}</option>`).join('')}</select></label>
+    <div class="mSpot" hidden><p class="muted">點小地圖選打卡地點（到這個點 30 公尺內才能打卡）</p><div class="mSpotMap"></div></div>
     <div class="inline mTimer">遊戲開始<input type="number" class="mAfter" value="10" min="0" inputmode="numeric">分鐘後，每<input type="number" class="mEvery" value="15" min="1" inputmode="numeric">分鐘一次</div>
     <p class="muted mManual">由監控室在地圖上按「發起」</p>`;
   el.querySelector('.mDel').onclick = () => { el.remove(); syncRules() };
+  el.querySelector('.mTask').onchange = () => syncSpot(el);
   $('mList').append(el);
   syncRules();
 }
 $('mAdd').onclick = addMissionCard;
+function syncSpot(el) {
+  const box = el.querySelector('.mSpot');
+  box.hidden = el.querySelector('.mTask').value !== 'checkin';
+  if (box.hidden) return;
+  if (!el.spotMap) {
+    const area = areaPts.length >= 3 && L.polygon(areaPts, { ...AREA_STYLE, interactive: false });
+    const m = el.spotMap = L.map(box.querySelector('.mSpotMap')).setView(area ? area.getBounds().getCenter() : NTU, 16);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+    if (area) area.addTo(m);
+    m.on('click', e => { el.spot = ptOf(e); el.spotMark?.remove(); el.spotMark = L.circle(el.spot, { radius: SPOT_M, ...SPOT_STYLE }).addTo(m) });
+  }
+  el.spotMap.invalidateSize();
+}
 // 「復活」獎賞只在被抓直接出局時能選；有監控室就不用設定時間
 function syncRules() {
   const outMode = $('ctgNo').checked, manual = $('monYes').checked;
@@ -384,6 +404,7 @@ $('createRoom').onclick = async () => {
   const t = id => $(id).value ? new Date($(id).value).toISOString() : null; // datetime-local 是手機當地時間
   const manual = $('monYes').checked;
   const missions = [...$('mList').children].map(el => ({ task: el.querySelector('.mTask').value, reward: el.querySelector('.mReward').value,
+    ...(el.querySelector('.mTask').value === 'checkin' ? { spot: el.spot || null } : {}),
     ...(manual ? { manual: true } : { after: Math.floor(+el.querySelector('.mAfter').value), every: Math.floor(+el.querySelector('.mEvery').value) }) }));
   const rules = missions.length ? { missions } : {};
   const body = {
@@ -391,6 +412,7 @@ $('createRoom').onclick = async () => {
     ghost_start_at: t('ghostStart'), end_at: t('endAt'), area: $('arYes').checked ? areaPts : null, rules,
   };
   if (body.area && body.area.length < 3) return alert('活動範圍至少要點 3 個點');
+  if (missions.some(m => m.task === 'checkin' && !m.spot)) return alert('「到指定地點打卡」要在小地圖上點一個打卡地點');
   if (missions.some(m => !m.manual && !(m.after >= 0 && m.every >= 1))) return alert('特殊任務的時間要填：開始後 0 分鐘以上、每 1 分鐘以上');
   if (body.end_at && Date.parse(body.end_at) <= Date.now()) return alert('遊戲結束時間要在現在之後');
   if (body.end_at && body.ghost_start_at && body.end_at <= body.ghost_start_at) return alert('遊戲結束時間要在鬼開始抓人之後');
@@ -648,7 +670,8 @@ $('startGame').onclick = async () => {
 // ---------- 特殊任務 ----------
 const JOINS = BASE + 'tag_mission_joins', RESULTS = BASE + 'tag_mission_results';
 const STORAGE = 'https://ielczttxqhgmpefbolvb.supabase.co/storage/v1/object/tag-photos/';
-let missionState = []; // 每個任務這一輪的狀態，給按鈕和倒數列用
+let missionState = [], spotLayers = {}; // 每個任務這一輪的狀態（給按鈕和倒數列用）、地圖上的打卡點
+const meters = (a, b) => 6371000 * 2 * Math.asin(Math.sqrt(Math.sin((b[0] - a[0]) * Math.PI / 360) ** 2 + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin((b[1] - a[1]) * Math.PI / 360) ** 2));
 const mName = i => `特殊任務 ${i + 1}`;
 // 遊戲開始時間：房主按開始 → 鬼開始抓人 → 房間建立；第 slot 輪從 first + slot*every 開始
 function missionClock(i) {
@@ -676,7 +699,7 @@ async function missionPoll(rows, me) {
     navigator.vibrate?.([200, 100, 200]);
     const other = r.pair.find(n => n !== st.name);
     alert(r.reward === 'hide'
-      ? (r.pair.includes(st.name) ? `${mName(r.mission)} 完成！你和 ${other} 隱藏定位 3 分鐘，鬼和其他人都看不到你們。` : `${mName(r.mission)} 完成！${r.pair.join('、')} 隱藏定位 3 分鐘。`)
+      ? (r.pair.includes(st.name) ? `${mName(r.mission)} 完成！${other ? `你和 ${other} ` : '你'}隱藏定位 3 分鐘，鬼和其他人都看不到你${other ? '們' : ''}。` : `${mName(r.mission)} 完成！${r.pair.join('、')} 隱藏定位 3 分鐘。`)
       : r.revived === st.name ? `你被復活了！${r.pair.join('、')} 完成了${mName(r.mission)}。請打開 Traccar 的追蹤。`
       : `${mName(r.mission)} 完成！${r.pair.join('、')} 完成任務，${r.revived} 復活了。`);
   }
@@ -712,7 +735,7 @@ async function missionPoll(rows, me) {
   // 任務列：每個進行中的任務一段
   const alive = p => p.role === 'human' && !p.caught;
   const anyOut = rows.some(p => p.role === 'human' && p.caught);
-  const blocks = []; let key = '';
+  const shown = new Set(), activeSpots = new Set();
   missionState = [];
   for (const [i, m] of ms.entries()) {
     const mc = clocks[i]; if (!mc) continue;
@@ -721,7 +744,7 @@ async function missionPoll(rows, me) {
     const mine = joins.find(j => j.name === st.name), partner = mine?.partner && joins.find(j => j.name === mine.partner);
     const mutual = partner?.partner === st.name;
     // 兩張照片都到了就請伺服器發獎賞（重複呼叫也只會發一次），下一次更新會看到結果
-    if (!done && mutual && mine.photo && partner.photo)
+    if (m.task === 'meetup' && !done && mutual && mine.photo && partner.photo)
       fetch(BASE + 'rpc/tag_mission_finish', { method: 'POST', headers: H, body: JSON.stringify({ p_room: st.room, p_mission: i, p_slot: mc.slot }) });
     const noTarget = m.reward === 'revive' && !anyOut; // 復活任務要有人出局才有意義
     const d = `data-i="${i}"`;
@@ -729,22 +752,40 @@ async function missionPoll(rows, me) {
       ? `<button class="primary" data-m="launch" ${d}${noTarget ? ' disabled' : ''}>發起${mName(i)}</button>${noTarget ? '<span class="muted">目前沒有人出局</span>' : ''}` : '';
     let state, html;
     if (mc.slot < 0) { state = 'wait' + noTarget; html = mc.manual ? `<div>${st.role === 'monitor' ? '由你決定什麼時候發起' : '等監控室發起'}</div>${launch}` : '<div>開始時間看上方倒數</div>' }
-    else if (done) { state = 'done' + noTarget; html = `<div>本輪已完成（${done.reward === 'hide' ? esc(done.pair.join('、')) + ' 隱藏定位 3 分鐘' : esc(done.revived) + ' 復活'}）</div>${launch}` }
-    else if (!me || !alive(me)) { state = 'watch'; html = '<div>進行中！還沒被抓的人可以兩兩碰面完成任務</div>' }
+    else if (done) { state = 'done' + noTarget; html = `<div>本輪已完成（${esc(done.pair.join('、'))} 完成，${done.reward === 'hide' ? '隱藏定位 3 分鐘' : esc(done.revived) + ' 復活'}）</div>${launch}` }
+    else if (!me || !alive(me)) { state = 'watch'; html = m.task === 'checkin' ? '<div>進行中！還沒被抓的人先到紫色打卡點打卡</div>' : '<div>進行中！還沒被抓的人可以兩兩碰面完成任務</div>' }
     else if (noTarget) { state = 'none'; html = '<div>進行中，但目前沒有人出局，完成也不能復活</div>' }
+    else if (m.task === 'checkin') {
+      // 用伺服器上自己最新回報的位置算距離，跟伺服器判斷打卡用的是同一份資料
+      const dm = me.lat == null ? null : Math.round(meters([me.lat, me.lng], m.spot));
+      if (dm == null) { state = 'noloc'; html = '<div>還沒收到你的位置，打開 Traccar 的追蹤才能打卡</div>' }
+      else if (dm <= SPOT_M) { state = 'near'; html = `<div>你在打卡點範圍內！</div><button class="primary" data-m="checkin" ${d}>打卡</button>` }
+      else { state = 'far' + Math.round(dm / 10); html = `<div>打卡點是地圖上的紫色圈，距離約 ${dm} 公尺（${SPOT_M} 公尺內才能打卡）</div>` }
+    }
     else if (!mine) { state = 'idle'; html = `<div>進行中！找另一個還沒被抓的人碰面，兩個人都按「執行任務」</div><button class="primary" data-m="join" ${d}>執行任務</button>` }
     else if (!partner) { state = 'code' + mine.code; html = `<div>你的驗證碼 <b class="code">${mine.code}</b>　請對方輸入</div><div><label for="mCode${i}" style="width:auto">輸入對方的驗證碼</label><input type="text" id="mCode${i}" inputmode="numeric" maxlength="4" autocomplete="off"><button class="primary" data-m="pair" ${d}>確認</button><button data-m="join" ${d}>重來</button></div>` }
     else if (!mutual) { state = 'half' + mine.code + partner.name; html = `<div>已輸入 ${esc(partner.name)} 的驗證碼，等 ${esc(partner.name)} 輸入你的驗證碼 <b class="code">${mine.code}</b>…</div><button data-m="join" ${d}>重來</button>` }
     else if (!mine.photo) { state = 'photo' + partner.name; html = `<div>配對成功！和 ${esc(partner.name)} 拍一張合照，兩個人都要各自上傳。</div><div><input type="file" id="mPhoto${i}" accept="image/*"><button class="primary" data-m="upload" ${d}>上傳</button></div>` }
     else { state = 'sent' + partner.name; html = `<div>照片已上傳，等 ${esc(partner.name)} 上傳…</div>` }
-    blocks.push(`<div class="mBlock"><div><b>${mName(i)}</b>：${TASKS[m.task].name} → ${REWARDS[m.reward].name}</div>${html}</div>`);
-    key += `${i}:${mc.slot}:${state}|`; // 換輪一定重畫
+    shown.add(i);
+    let blk = $('missionPanel').querySelector(`.mBlock[data-i="${i}"]`);
+    if (!blk) { // 依任務順序插入
+      blk = Object.assign(document.createElement('div'), { className: 'mBlock' }); blk.dataset.i = i;
+      $('missionPanel').insertBefore(blk, [...$('missionPanel').children].find(c => +c.dataset.i > i) || null);
+    }
+    const key = `${mc.slot}:${state}`; // 換輪一定重畫；狀態沒變就不重畫，避免打字打到一半被清掉
+    if (blk.dataset.key !== key) { blk.dataset.key = key; blk.innerHTML = `<div><b>${mName(i)}</b>：${TASKS[m.task].name} → ${REWARDS[m.reward].name}</div>${html}` }
     missionState[i] = { slot: mc.slot, done: !!done, alive: rows.filter(alive).map(p => p.name) };
+    // 打卡點：這一輪進行中才畫在地圖上（所有人都看得到）
+    if (m.task === 'checkin' && m.spot && mc.slot >= 0 && !done) {
+      activeSpots.add(i);
+      spotLayers[i] ||= L.circle(m.spot, { radius: SPOT_M, ...SPOT_STYLE, interactive: false }).addTo(map)
+        .bindTooltip(`打卡點・${mName(i)}`, { permanent: true, direction: 'center', className: 'tag' });
+    }
   }
-  if (!blocks.length) { $('missionPanel').hidden = true; return }
-  // 狀態沒變就不重畫，避免打字打到一半被清掉
-  if ($('missionPanel').dataset.key !== key) { $('missionPanel').dataset.key = key; $('missionPanel').innerHTML = blocks.join('') }
-  $('missionPanel').hidden = false;
+  for (const k of Object.keys(spotLayers)) if (!activeSpots.has(+k)) { spotLayers[k].remove(); delete spotLayers[k] }
+  [...$('missionPanel').children].forEach(c => { if (!shown.has(+c.dataset.i)) c.remove() });
+  $('missionPanel').hidden = !shown.size;
 }
 $('missionPanel').onclick = async e => {
   const act = e.target.dataset?.m; if (!act) return;
@@ -756,6 +797,12 @@ $('missionPanel').onclick = async e => {
     if (act === 'launch') {
       const r = await fetch(`${ROOMS}?room=eq.${q(st.room)}`, { method: 'PATCH', headers: H, body: JSON.stringify({ mission_slots: { ...st.cfg.mission_slots, [i]: ms.slot + 1 } }) });
       if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    }
+    if (act === 'checkin') {
+      const r = await fetch(BASE + 'rpc/tag_mission_checkin', { method: 'POST', headers: H, body: JSON.stringify({ p_room: st.room, p_mission: i, p_slot: ms.slot, p_name: st.name }) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.message || r.status);
+      if (!res) throw new Error('打卡成功，但目前沒有人出局，沒有人可以復活');
     }
     if (act === 'join') { // 開始或重來：新的驗證碼、清掉配對和照片
       const code = String(crypto.getRandomValues(new Uint16Array(1))[0] % 10000).padStart(4, '0');
@@ -799,7 +846,7 @@ async function shrink(file) {
 }
 
 // 任務合照：監控室和鬼可以看
-const canViewPhotos = () => missionsOf(st.cfg).length > 0 && (st.role === 'monitor' || st.role === 'ghost');
+const canViewPhotos = () => missionsOf(st.cfg).some(m => m.task === 'meetup') && (st.role === 'monitor' || st.role === 'ghost');
 const photoUrls = new Map(); // 照片要帶金鑰才能讀，抓成 blob 網址後快取
 async function photoUrl(path) {
   if (!photoUrls.has(path)) {
@@ -902,7 +949,7 @@ $('caught').onclick = async () => {
 $('help').onclick = () => { clearInterval(timer); clearInterval(clockTimer); show('s3') };
 $('leave').onclick = () => {
   if (!confirm(`確定要離開房間「${st.room}」？\n\n之後輸入同一個房號和名字「${st.name}」就能用原本的身分回來。`)) return;
-  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
+  clearInterval(timer); clearInterval(clockTimer); $('gallery').hidden = true; gameArea?.remove(); gameArea = editPts = null; Object.values(spotLayers).forEach(l => l.remove()); spotLayers = {}; drawnKey = undefined; renderEdit(); st = {}; store.set(st); show('s1') };
 
 // 分享連結 ?room=xxx：直接進到填名字；同一個房間就接回原本的畫面
 const linkRoom = new URLSearchParams(location.search).get('room');

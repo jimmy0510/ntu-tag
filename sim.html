@@ -54,7 +54,7 @@
     <button id="shrink">監控室縮圈（縮成 70%）</button>
     <label>特殊任務 <select id="mSel"></select></label>
     <button id="launch">監控室發起這個任務</button>
-    <button id="finish">兩個人完成這個任務（含上傳合照）</button>
+    <button id="finish">完成這個任務（合照任務：兩人上傳合照；打卡任務：一個人跑去打卡）</button>
     <button id="iosGap">iOS 玩家全部進背景 3 分鐘</button>
     <button id="endNow">監控室按「遊戲結束」</button>
     <button id="cleanup">結束並清除模擬資料</button>
@@ -78,8 +78,9 @@ const BOTS = [{ name: '監控室', role: 'monitor', os: 'web' },
   ...[1, 2, 3, 4].map(i => ({ name: `人${i}(${i % 2 ? 'iOS' : '安卓'})`, role: 'human', os: i % 2 ? 'ios' : 'android' }))];
 let room, ctg, sg, bots = [], area = AREA, running = true, timers = [];
 // 有監控室，所以任務都由監控室發起；「復活」獎賞只在被抓出局時有
-const MISSIONS = () => [...(ctg ? [] : [{ task: 'meetup', reward: 'revive', manual: true }]), { task: 'meetup', reward: 'hide', manual: true }];
-const REWARD_NAME = { revive: '復活一個出局的人', hide: '隱藏定位 3 分鐘' };
+const SPOT = [25.0186, 121.5410]; // 打卡點：小椰林道東邊
+const MISSIONS = () => [{ task: 'meetup', reward: ctg ? 'hide' : 'revive', manual: true }, { task: 'checkin', reward: 'hide', manual: true, spot: SPOT }];
+const REWARD_NAME = { revive: '復活一個出局的人', hide: '隱藏定位 3 分鐘' }, TASK_NAME = { meetup: '兩人碰面合照', checkin: '到指定地點打卡' };
 
 async function api(path, { method = 'GET', body, prefer } = {}) {
   const r = await fetch(REST + path, { method, headers: prefer ? { ...H, Prefer: prefer } : H, body: body && JSON.stringify(body) });
@@ -131,7 +132,7 @@ $('setup').onclick = async () => {
       localStorage.setItem('tag:' + b.name, JSON.stringify({ room, name: b.name, role: b.role, step: 'map', cfg, host: b.role === 'monitor', monitor: b.role === 'monitor' }));
       $('frames').append(phone(b));
     }
-    $('mSel').replaceChildren(...MISSIONS().map((m, i) => new Option(`特殊任務 ${i + 1}：${REWARD_NAME[m.reward]}`, i)));
+    $('mSel').replaceChildren(...MISSIONS().map((m, i) => new Option(`特殊任務 ${i + 1}：${TASK_NAME[m.task]} → ${REWARD_NAME[m.reward]}`, i)));
     log(`建立房間 ${room}：被抓${ctg ? '變成鬼' : '出局'}、人${sg ? '看得到' : '看不到'}鬼、${$('endMin').value} 分鐘後結束、${MISSIONS().length} 個特殊任務`, 'note');
     $('ctrl').hidden = false;
     bots.forEach((b, i) => setTimeout(() => report(b), i * 300));
@@ -245,6 +246,7 @@ $('finish').onclick = async () => {
     const i = +$('mSel').value;
     const [r] = await api(`tag_rooms?room=eq.${q(room)}&select=mission_slots`);
     if (r.mission_slots[i] == null) return log(`要先按「監控室發起這個任務」（特殊任務 ${i + 1}）`, 'warn');
+    if (MISSIONS()[i].task === 'checkin') return checkin(i, r.mission_slots[i]);
     const pair = bots.filter(b => b.role === 'human' && !b.caught).sort(() => rand() - .5).slice(0, 2);
     if (pair.length < 2) return log('還活著的人不到 2 個，做不了任務', 'warn');
     const slot = r.mission_slots[i], paths = [];
@@ -263,6 +265,18 @@ $('finish').onclick = async () => {
     sync();
   } catch (e) { log('任務失敗：' + e.message, 'warn') }
 };
+// 打卡：挑一個還活著的人，移到打卡點旁邊、馬上回報位置，再按打卡（伺服器用剛回報的位置判斷）
+async function checkin(i, slot) {
+  const alive = bots.filter(b => b.role === 'human' && !b.caught);
+  if (!alive.length) return log('沒有還活著的人可以打卡', 'warn');
+  const b = alive[Math.floor(rand() * alive.length)];
+  b.lat = SPOT[0] + (rand() - .5) * .0002; b.lng = SPOT[1] + (rand() - .5) * .0002; b.gapUntil = 0;
+  await report(b);
+  const r = await fetch(REST + 'rpc/tag_mission_checkin', { method: 'POST', headers: H, body: JSON.stringify({ p_room: room, p_mission: i, p_slot: slot, p_name: b.name }) });
+  const res = await r.json();
+  if (!r.ok) return log(`${b.name} 打卡失敗：${res.message}`, 'warn');
+  log(`${b.name} 到打卡點打卡，完成特殊任務 ${i + 1}：${res.reward === 'hide' ? '隱藏定位 3 分鐘' : res.revived + ' 復活'}`, 'note');
+}
 function fakePhoto(pair) {
   const c = Object.assign(document.createElement('canvas'), { width: 480, height: 640 }), g = c.getContext('2d');
   g.fillStyle = `hsl(${rand() * 360} 45% 45%)`; g.fillRect(0, 0, 480, 640);
